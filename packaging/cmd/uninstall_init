@@ -1,0 +1,6 @@
+#!/bin/bash
+### 卸载前：停止服务。用户数据存放在其自行选择的目录中，这里不做删除。
+set -u
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+"${SCRIPT_DIR}/main" stop >/dev/null 2>&1
+exit 0

@@ -1,0 +1,20 @@
+appname               = waterfish_anthology
+version               = 1.0.0
+display_name           = 水鱼文集
+desc                  = 面向写作与内容整理的 Markdown 文集：文章库、图片库（本地 / Cloudinary 图床）、SEO 检测与自定义存储路径。接入飞牛统一网关，NAS 账号免登打开，各账号数据独立。
+source                = thirdparty
+platform              = x86
+
+maintainer            = waterfish
+maintainer_url        = https://fnnas.com
+
+os_min_version        = 1.0.0
+
+desktop_uidir         = ui
+desktop_applaunchname = waterfish_anthology.main
+
+service_port          = 8631
+checkport             = true
+ctl_stop              = true
+
+changelog             = 1.0.0 首个公开发布版本。Markdown 文集：文章库支持标题 / 列表 / 表格 / 代码块等完整语法与实时预览，一键复制同时写入富文本与 Markdown 双格式，粘贴进 Notion 格式完整保留；编辑器内置自建撤销 / 重做栈（工具栏插入标题、图片等程序化操作后可精准回退）、每篇文章独立的自动保存开关（停止输入即保存，状态持久化，刷新恢复）、未保存修改离开确认。图片库：本地存储与 Cloudinary 图床双通道，上传自动去重、即时刷新。SEO 检测：多引擎收录查询（百度 / 360 / 搜狗，含移动线路、限流退避与真实收录解析）与页面性能体检，外网请求带公共 DNS 备用线路。外观：内置纸墨 / 琥珀 / 松绿 / 紫罗兰 / 玫红 5 套完整主题（配色、字体、字号、背景整体打包），点选即生效；支持上传多个自定义 JS 主题（以文件名命名，重名自动加后缀，可切换、可删除）。数据隔离：接入飞牛统一网关，NAS 账号免登打开，每个账号独立文章库、图片库、图床配置与存储路径；支持由管理员设置共享存储路径，自动为每个账号建立独立子文件夹，多账号互不覆盖。

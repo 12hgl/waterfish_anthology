@@ -1,0 +1,6 @@
+#!/bin/bash
+### 升级前：停掉正在运行的实例，保证文件不被占用
+set -u
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+"${SCRIPT_DIR}/main" stop >/dev/null 2>&1
+exit 0

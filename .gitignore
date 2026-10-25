@@ -1,0 +1,12 @@
+# 构建产物
+/dist/
+/.build/
+/.tools/
+
+# 运行时数据（本地调试产生）
+/.runtime/
+/src/.runtime/
+
+# 系统文件
+.DS_Store
+Thumbs.db

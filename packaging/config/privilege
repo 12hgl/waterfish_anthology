@@ -1,0 +1,7 @@
+{
+    "defaults": {
+        "run-as": "package"
+    },
+    "username": "waterfish_anthology",
+    "groupname": "waterfish_anthology"
+}

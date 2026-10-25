@@ -1,0 +1,17 @@
+{
+    ".url": {
+        "waterfish_anthology.main": {
+            "title": "水鱼文集",
+            "icon": "images/icon_{0}.png",
+            "type": "iframe",
+            "protocol": "",
+            "gatewayPrefix": "/app/waterfish_anthology",
+            "gatewaySocket": "app.sock",
+            "url": "/app/waterfish_anthology",
+            "allUsers": true,
+            "control": {
+                "accessPerm": "readonly"
+            }
+        }
+    }
+}

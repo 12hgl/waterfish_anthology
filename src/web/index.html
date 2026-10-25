@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>水鱼文集</title>
+<link rel="icon" href="static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+
+<div class="shell" id="shell">
+
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" fill="none">
+          <defs>
+            <image width="15" height="16" id="brandDoc" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA8AAAAQCAMAAAD+iNU2AAAAAXNSR0IB2cksfwAAAIFQTFRFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAbRUtZQAAACt0Uk5TACIOIOr9r2AQcM//9TClA6LfMiSmBDfpvu0nUJ/vg1wJGowKFgEC2YopBkHuR8AAAACTSURBVHicVY3LCsIwFERnEkjb7BWhChV8oP//LSq6UbQrQZC60EqCN7GEdiCLM/eEISSkRxfK0wx5Jy6cM+Q3VoGt+4hkqNgE1rmLbuYLPhn0Nn41lnyw04Fc55SlpI/ZZjKTdKAMs7CjC6rzv5l5ztncUel6IlWprlzwFE9LHjHFjehl/ar7vFIHDO6b/ZC3O/wAy6sneUUrLuQAAAAASUVORK5CYII="/>
+          </defs>
+          <path d="m27 9h-10.6l-3.4-3.4q-0.1-0.2-0.3-0.3-0.2-0.1-0.3-0.1-0.2-0.1-0.4-0.2-0.2 0-0.4 0h-6.6q-0.4 0-0.8 0.2-0.3 0.1-0.6 0.4-0.3 0.3-0.4 0.6-0.2 0.4-0.2 0.8v18.1q0 0.4 0.1 0.7 0.2 0.4 0.5 0.6 0.2 0.3 0.6 0.5 0.3 0.1 0.7 0.1h22.2q0.4 0 0.7-0.1 0.4-0.2 0.6-0.5 0.3-0.2 0.5-0.6 0.1-0.3 0.1-0.7v-14.1q0-0.4-0.2-0.8-0.1-0.3-0.4-0.6-0.3-0.3-0.6-0.4-0.4-0.2-0.8-0.2zm-22-2h6.6l2 2h-8.6zm22 18h-22v-14h22z" fill="currentColor"/>
+          <use href="#brandDoc" x="14" y="-1"/>
+        </svg>
+      </span>
+      <span class="brand-name">水鱼文集</span>
+    </div>
+
+    <nav class="nav" id="nav">
+      <button class="nav-item" data-view="articles">
+        <span class="nav-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 4.5h9.5L19 9v10.5H5z"/><path d="M14 4.5V9h5"/><path d="M8.5 13h7M8.5 16.5h4.5"/>
+          </svg>
+        </span>
+        <span class="nav-label">文章库</span>
+      </button>
+      <button class="nav-item" data-view="images">
+        <span class="nav-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3.5" y="5" width="17" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m4 17 5-4.5 4 3.5 3-2.5 4 3.5"/>
+          </svg>
+        </span>
+        <span class="nav-label">图片库</span>
+      </button>
+      <button class="nav-item" data-view="seo">
+        <span class="nav-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="10.5" cy="10.5" r="6"/><path d="m15.5 15.5 4.5 4.5"/><path d="M8 10.5h5M10.5 8v5"/>
+          </svg>
+        </span>
+        <span class="nav-label">SEO</span>
+      </button>
+      <button class="nav-item" data-view="settings">
+        <span class="nav-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.6 1.6 0 0 0 .32 1.77l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.6 1.6 0 0 0-2.72 1.13V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7.4 19.4l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.6 1.6 0 0 0 3 14.6H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 7.4l-.06-.06A2 2 0 1 1 7.37 4.5l.06.06A1.6 1.6 0 0 0 9.2 4.6H9.3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.72 1.13l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.6 1.6 0 0 0 19.4 11h.1a2 2 0 1 1 0 4h-.1z"/>
+          </svg>
+        </span>
+        <span class="nav-label">设置</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <button class="collapse-btn" id="collapseBtn" title="收起侧栏">
+        <span class="nav-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14.5 6 9 12l5.5 6"/>
+          </svg>
+        </span>
+      </button>
+    </div>
+  </aside>
+
+  <main class="content" id="content">
+    <div class="view" id="view"></div>
+  </main>
+
+</div>
+
+<div class="toasts" id="toasts"></div>
+<div class="modal-host" id="modalHost"></div>
+
+<script src="static/vendor/marked.min.js"></script>
+<script type="module" src="static/app.js"></script>
+</body>
+</html>

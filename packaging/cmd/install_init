@@ -1,0 +1,5 @@
+#!/bin/bash
+### 安装前：准备目录
+set -u
+mkdir -p "${TRIM_PKGETC:-.}" "${TRIM_PKGVAR:-.}" 2>/dev/null
+exit 0

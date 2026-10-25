@@ -1,0 +1,8 @@
+#!/bin/bash
+### 安装后：确保运行目录与日志文件就绪
+set -u
+mkdir -p "${TRIM_PKGETC:-.}" "${TRIM_PKGVAR:-.}" 2>/dev/null
+: > "${TRIM_PKGVAR:-.}/info.log" 2>/dev/null
+chmod +x "${TRIM_APPDEST:-.}/server/waterfish-anthology" 2>/dev/null
+echo "$(date '+%Y-%m-%d %H:%M:%S') - installed ${TRIM_APPNAME:-waterfish_anthology} ${TRIM_APPVER:-}" >> "${TRIM_PKGVAR:-.}/info.log" 2>/dev/null
+exit 0

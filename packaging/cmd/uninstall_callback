@@ -1,0 +1,5 @@
+#!/bin/bash
+### 卸载后：清理运行日志与临时文件（文章/图片/SEO 数据保留在用户选择的存储目录中）
+set -u
+rm -f "${TRIM_PKGVAR:-.}/app.pid" "${TRIM_PKGVAR:-.}/info.log" 2>/dev/null
+exit 0
