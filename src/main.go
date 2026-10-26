@@ -110,6 +110,11 @@ func (a *App) Routes(mux *http.ServeMux) {
 	// SEO
 	mux.HandleFunc("/api/seo", a.handleSEOList)
 	mux.HandleFunc("/api/seo/", a.handleSEO)
+
+	// 版本更新检测与发布适配器（实验性）
+	mux.HandleFunc("/api/update-check", a.handleUpdateCheck)
+	mux.HandleFunc("/api/publishers", a.handlePublishers)
+	mux.HandleFunc("/api/publishers/", a.handlePublisherItem)
 }
 
 func (a *App) handleIndex(sub fs.FS) http.HandlerFunc {

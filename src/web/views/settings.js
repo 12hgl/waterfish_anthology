@@ -1,7 +1,8 @@
-/* 设置：账号 / 外观 / 管理员设置（图床 + 存储，仅管理员） / 关于 */
+/* 设置：账号 / 外观 / 管理员设置（图床 + 存储，仅管理员） / 更新与实验 / 关于 */
 
 import { api } from '../api.js';
 import * as ui from '../ui.js';
+import { expPublishEnabled, openPublisherConfigDialog } from '../publish.js';
 
 const TUTORIAL_URL = 'https://blog.waterfish.ren/article/4023794e-eb27-8082-a989-db0ca64a70c9';
 const MAX_THEME_JS = 64 * 1024;
@@ -32,6 +33,7 @@ export async function render(el, ctx) {
   const st = ctx.state || await ctx.refreshState();
   const isAdmin = !!st.user?.isAdmin || st.user?.source === 'local';
   const ap = st.appearance || {};
+  const expPublish = expPublishEnabled();
 
   el.innerHTML = `
     <div class="page-head">
@@ -164,8 +166,28 @@ export async function render(el, ctx) {
     <div class="card card-pad section" data-panel="updates" hidden>
       <div class="section-title">检测更新</div>
       <p class="section-desc">当前版本 v${ui.esc(st.version)}</p>
-      <div class="section-title" style="margin-top:24px">实验性功能</div>
-      <p class="section-desc">暂无开放的实验功能</p>
+      <div class="update-bar">
+        <button class="btn btn-primary btn-sm" id="checkUpdateBtn">${ui.icon('refresh', 14)}<span>检查更新</span></button>
+      </div>
+      <div class="update-result" id="updateResult" hidden></div>
+
+      <div class="section-title" style="margin-top:28px">实验性功能</div>
+      <div class="exp-row">
+        <div class="exp-info">
+          <b>文章发布（Beta）</b>
+          <p>在文章编辑页显示「发布」按钮：支持复制发布（文章与图片按序写入剪贴板），也可下载适配器后直接发布到 NotionNext 等建站系统。</p>
+        </div>
+        <label class="switch" title="开启 / 关闭发布功能">
+          <input type="checkbox" id="expPublishToggle" ${expPublish ? 'checked' : ''}>
+          <span class="switch-track"></span>
+        </label>
+      </div>
+
+      <div class="pub-admin" id="pubAdmin" ${expPublish ? '' : 'hidden'}>
+        <div class="section-title" style="margin-top:24px">发布适配器</div>
+        <p class="section-desc">适配器代码托管在项目仓库，按需下载；密钥仅保存在本机。</p>
+        <div class="pub-admin-list" id="pubAdminList"></div>
+      </div>
     </div>
 
     <!-- 关于 -->
@@ -298,9 +320,151 @@ export async function render(el, ctx) {
     };
   });
 
+  /* ---------- 检测更新 ---------- */
+  const paintUpdate = (r) => {
+    const box = $('#updateResult');
+    box.hidden = false;
+    if (r.error) {
+      box.innerHTML = `<div class="update-card is-err">${ui.icon('alert', 18)}<div class="update-body"><b>检查失败</b><p>${ui.esc(r.error)}</p></div></div>`;
+      return;
+    }
+    if (!r.hasUpdate) {
+      box.innerHTML = `<div class="update-card is-ok">${ui.icon('check', 18)}<div class="update-body"><b>已是最新版本</b><p>当前 v${ui.esc(r.current)}${r.latest ? ` · 仓库最新 v${ui.esc(r.latest)}` : ''}</p></div></div>`;
+      return;
+    }
+    const link = (label, url, icon) => url
+      ? `<a class="btn btn-ghost btn-sm" href="${ui.esc(url)}" target="_blank" rel="noopener noreferrer">${ui.icon(icon, 14)}<span>${label}</span></a>`
+      : '';
+    const acc = (u) => 'https://gh-proxy.com/' + u;
+    box.innerHTML = `
+      <div class="update-card is-new">
+        <div class="update-head">${ui.icon('rocket', 18)}
+          <div class="update-body">
+            <b>发现新版本 v${ui.esc(r.latest)}</b>
+            <p>当前 v${ui.esc(r.current)}${r.date ? ` · 发布于 ${ui.esc(r.date)}` : ''}</p>
+          </div>
+        </div>
+        ${r.notes ? `<pre class="update-notes">${ui.esc(r.notes)}</pre>` : ''}
+        <div class="update-actions">
+          ${link('x86 安装包', r.x86, 'download')}
+          ${link('x86 加速下载', acc(r.x86), 'download')}
+          ${link('ARM 安装包', r.arm, 'download')}
+          ${link('ARM 加速下载', acc(r.arm), 'download')}
+          ${link('Release 页面', r.release, 'external')}
+        </div>
+      </div>`;
+  };
+
+  $('#checkUpdateBtn').onclick = async (e) => {
+    const btn = e.currentTarget;
+    const label = btn.querySelector('span');
+    btn.disabled = true;
+    label.textContent = '检查中…';
+    try {
+      paintUpdate(await api.checkUpdate());
+    } catch (err) {
+      paintUpdate({ error: err.message });
+    } finally {
+      btn.disabled = false;
+      label.textContent = '检查更新';
+    }
+  };
+
+  /* ---------- 实验性功能：发布 Beta ---------- */
+  $('#expPublishToggle').onchange = (e) => {
+    const on = e.target.checked;
+    try { localStorage.setItem('wf.exp.publish', on ? '1' : '0'); } catch { /* 隐私模式忽略 */ }
+    $('#pubAdmin').hidden = !on;
+    if (on) paintPublishers();
+    ui.toast(on ? '已开启文章发布（Beta）' : '已关闭文章发布', on ? '文章编辑页将显示「发布」按钮' : '', on ? 'ok' : 'info');
+  };
+
+  const pubList = $('#pubAdminList');
+  const paintPublishers = async () => {
+    pubList.innerHTML = '<div class="pub-admin-loading">加载中…</div>';
+    let r;
+    try {
+      r = await api.publishers();
+    } catch (e) {
+      pubList.innerHTML = `<div class="hint" style="color:var(--err)">加载失败：${ui.esc(e.message)}</div>`;
+      return;
+    }
+    const installed = r.installed || [];
+    const available = (r.available || []).filter((a) => !installed.some((p) => p.id === a.id));
+    const rows = [
+      ...installed.map((p) => `
+        <div class="pub-admin-row">
+          <div class="pub-admin-info">
+            <b>${ui.esc(p.name || p.id)}</b>
+            <span class="pub-admin-meta">v${ui.esc(p.version || '?')}${p.missing ? ' · 文件丢失，请重新下载' : ''}</span>
+            ${p.desc ? `<span class="pub-admin-desc">${ui.esc(p.desc)}</span>` : ''}
+          </div>
+          <div class="pub-admin-ops">
+            <button class="btn btn-ghost btn-sm" data-pub-config="${ui.esc(p.id)}">配置</button>
+            <button class="btn btn-danger btn-sm" data-pub-del="${ui.esc(p.id)}">卸载</button>
+          </div>
+        </div>`),
+      ...available.map((a) => `
+        <div class="pub-admin-row is-available">
+          <div class="pub-admin-info">
+            <b>${ui.esc(a.name || a.id)}</b>
+            <span class="pub-admin-meta">未安装</span>
+            ${a.desc ? `<span class="pub-admin-desc">${ui.esc(a.desc)}</span>` : ''}
+          </div>
+          <div class="pub-admin-ops">
+            <button class="btn btn-ghost btn-sm" data-pub-install="${ui.esc(a.id)}"
+              data-name="${ui.esc(a.name || '')}" data-desc="${ui.esc(a.desc || '')}">下载</button>
+          </div>
+        </div>`),
+    ].join('');
+    pubList.innerHTML = rows || '<div class="pub-admin-empty">暂无适配器</div>';
+    if (r.error) {
+      pubList.innerHTML += `<div class="hint" style="color:var(--warn);margin-top:8px">${ui.esc(r.error)}</div>`;
+    }
+
+    pubList.querySelectorAll('[data-pub-config]').forEach((btn) => {
+      btn.onclick = () => {
+        const meta = installed.find((p) => p.id === btn.dataset.pubConfig);
+        if (meta) openPublisherConfigDialog(meta, paintPublishers);
+      };
+    });
+    pubList.querySelectorAll('[data-pub-del]').forEach((btn) => {
+      btn.onclick = async () => {
+        const meta = installed.find((p) => p.id === btn.dataset.pubDel);
+        const ok = await ui.confirmDialog({
+          title: `卸载「${meta ? (meta.name || meta.id) : btn.dataset.pubDel}」？`,
+          desc: '适配器文件与已保存的密钥配置将被移除。',
+          okText: '卸载', danger: true,
+        });
+        if (!ok) return;
+        try {
+          await api.removePublisher(btn.dataset.pubDel);
+          ui.toast('已卸载', '', 'ok');
+          paintPublishers();
+        } catch (e) { ui.toast('卸载失败', e.message, 'err'); }
+      };
+    });
+    pubList.querySelectorAll('[data-pub-install]').forEach((btn) => {
+      btn.onclick = async () => {
+        btn.disabled = true;
+        btn.textContent = '下载中…';
+        try {
+          const p = await api.installPublisher(btn.dataset.pubInstall, btn.dataset.name, btn.dataset.desc);
+          ui.toast('适配器已安装', p.name || p.id, 'ok');
+          paintPublishers();
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = '下载';
+          ui.toast('下载失败', e.message, 'err', 6000);
+        }
+      };
+    });
+  };
+  if (expPublish) paintPublishers();
+
   /* ---------- 图床 ---------- */
-  $('#cloudOn').onchange = (e) => { $('#cloudStateText').textContent = e.target.checked ? '已启用' : '未启用'; };
-  $('#saveCloud').onclick = async () => {
+  $('#cloudOn') && ($('#cloudOn').onchange = (e) => { $('#cloudStateText').textContent = e.target.checked ? '已启用' : '未启用'; });
+  $('#saveCloud') && ($('#saveCloud').onclick = async () => {
     const body = {
       cloudinary: {
         enabled: $('#cloudOn').checked,
@@ -313,7 +477,7 @@ export async function render(el, ctx) {
       ui.toast('已保存', '图床设置已更新', 'ok');
       ctx.refreshState();
     } catch (e) { ui.toast('保存失败', e.message, 'err', 6000); }
-  };
+  });
 
   /* ---------- 外观：主题模式 ---------- */
   const modeTabs = $('#apMode');

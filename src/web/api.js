@@ -46,4 +46,17 @@ export const api = {
   saveSettings: (body) => req('api/settings', { method: 'PUT', body: JSON.stringify(body) }),
   setStorage: (path) => req('api/settings/storage', { method: 'POST', body: JSON.stringify({ path }) }),
   browse: (path) => req('api/browse' + (path ? `?path=${enc(path)}` : '')),
+
+  // 版本更新检测（服务端拉取仓库 latest 分支 releases.js，直连失败自动走加速线路）
+  checkUpdate: () => req('api/update-check'),
+
+  // 发布适配器（实验性功能）
+  publishers: () => req('api/publishers'),
+  installPublisher: (id, name, desc) => req('api/publishers', {
+    method: 'POST', body: JSON.stringify({ id, name, desc }),
+  }),
+  savePublisherConfig: (id, config) => req(`api/publishers/${enc(id)}`, {
+    method: 'PUT', body: JSON.stringify({ config }),
+  }),
+  removePublisher: (id) => req(`api/publishers/${enc(id)}`, { method: 'DELETE' }),
 };

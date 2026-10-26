@@ -52,3 +52,19 @@ export function renderMarkdown(md) {
   }
   return sanitize(html);
 }
+
+// 把 Markdown 渲染为剪贴板用的 HTML 片段：
+// 云端图片（http(s)）保留 <img>，本地图片替换为文字占位，避免无效外链。
+export function buildCopyHTML(markdown) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = renderMarkdown(markdown);
+  tpl.content.querySelectorAll('img').forEach((img) => {
+    const src = img.getAttribute('src') || '';
+    if (/^(https?:)?\/\//i.test(src)) return; // 云端图片保留
+    const name = decodeURIComponent(src.split('/').pop()) || '本地图片';
+    const span = document.createElement('span');
+    span.textContent = `[图片：${name}]`;
+    img.replaceWith(span);
+  });
+  return '<html><body><!--StartFragment-->' + tpl.innerHTML + '<!--EndFragment--></body></html>';
+}

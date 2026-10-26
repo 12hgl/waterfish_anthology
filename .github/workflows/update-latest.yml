@@ -1,0 +1,126 @@
+name: 更新 latest 安装包
+
+# 每次发布新版本后，自动把该版本的安装包（文件名去掉版本号）推送到 latest 分支，
+# 提供固定不变的下载地址：
+#   https://raw.githubusercontent.com/12hgl/waterfish_anthology/latest/waterfish_anthology_x86.fpk
+#   https://raw.githubusercontent.com/12hgl/waterfish_anthology/latest/waterfish_anthology_arm.fpk
+# latest 分支只保留单次提交（每次整体重建后强推），不在 Git 历史中累积旧二进制。
+# 分支内附 version.txt 与 releases.js：记录当前版本号、更新内容与安装包下载地址，
+# 供应用内「设置 → 检测更新」读取（直连失败时自动走 gh-proxy 加速）。
+
+on:
+  release:
+    # published：发布新 Release（含从草稿发布）；released：预发布转正式；edited：补充/更换附件后重新同步
+    types: [published, released, edited]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要同步的版本标签（留空则取最新 Release）"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  update-latest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 确定要同步的版本
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          elif [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG=$(gh release view --repo "${{ github.repository }}" --json tagName --jq .tagName)
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::未找到可同步的 Release"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "同步版本：$TAG"
+
+      - name: 下载安装包并去掉版本号
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p latest-root
+          gh release download "${{ steps.ver.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern "*.fpk" --dir latest-root --clobber
+
+          # 文件名去掉版本号（兼容 -1.2.3 / _v1.2.3 / -1.2.3-beta 等后缀）
+          shopt -s nullglob
+          for f in latest-root/*.fpk; do
+            base=$(basename "$f" .fpk)
+            clean=$(printf '%s' "$base" | sed -E 's/[-_]?v?[0-9]+\.[0-9]+\.[0-9]+([-.].*)?$//')
+            if [ "$clean" != "$base" ] && [ -n "$clean" ]; then
+              mv "$f" "latest-root/${clean}.fpk"
+            fi
+          done
+
+          count=$(ls latest-root/*.fpk 2>/dev/null | wc -l)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::Release ${{ steps.ver.outputs.tag }} 中没有 .fpk 安装包，已中止"
+            exit 1
+          fi
+          ls -la latest-root
+
+          # 版本号与说明文件，便于更新检测与分支页展示
+          printf '%s\n' "${{ steps.ver.outputs.tag }}" > latest-root/version.txt
+          cat > latest-root/README.md <<EOF
+          # 水鱼文集 · 最新安装包
+
+          本分支由 GitHub Actions 在每次发布新版本时自动更新，始终保留最新版本的安装包（文件名不含版本号）。
+
+          **当前版本：${{ steps.ver.outputs.tag }}**
+
+          | 架构 | 下载 |
+          | --- | --- |
+          | x86_64 | [waterfish_anthology_x86.fpk](https://raw.githubusercontent.com/${{ github.repository }}/latest/waterfish_anthology_x86.fpk) |
+          | ARM64 | [waterfish_anthology_arm.fpk](https://raw.githubusercontent.com/${{ github.repository }}/latest/waterfish_anthology_arm.fpk) |
+
+          历史版本见 [Releases](https://github.com/${{ github.repository }}/releases)。
+          EOF
+
+      # 应用内的「检查更新」读取本文件：最新版本号、更新内容、安装包下载地址
+      - name: 生成版本信息 releases.js
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          repo = os.environ['GITHUB_REPOSITORY']
+          tag = os.environ['TAG']
+          raw = subprocess.run(
+              ['gh', 'release', 'view', tag, '--repo', repo, '--json', 'body,publishedAt'],
+              capture_output=True, text=True, check=True,
+          ).stdout
+          info = json.loads(raw)
+          data = {
+              'version': tag.lstrip('vV'),
+              'date': (info.get('publishedAt') or '')[:10],
+              'notes': (info.get('body') or '').strip(),
+              'x86': f'https://raw.githubusercontent.com/{repo}/latest/waterfish_anthology_x86.fpk',
+              'arm': f'https://raw.githubusercontent.com/{repo}/latest/waterfish_anthology_arm.fpk',
+              'release': f'https://github.com/{repo}/releases/tag/{tag}',
+          }
+          js = 'window.waterfishRelease = ' + json.dumps(data, ensure_ascii=False, indent=2) + ';\n'
+          with open('latest-root/releases.js', 'w', encoding='utf-8') as f:
+              f.write(js)
+          print('releases.js 已生成：', data['version'], data['date'])
+          PY
+
+      - name: 推送到 latest 分支
+        run: |
+          cd latest-root
+          git init -b latest
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "最新安装包：${{ steps.ver.outputs.tag }}"
+          # 整体重建后强推，latest 分支始终保持单次提交，不累积历史
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" latest

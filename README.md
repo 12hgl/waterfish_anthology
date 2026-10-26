@@ -62,8 +62,11 @@ waterfish_anthology/
 │   ├── editorstate.go          编辑器状态：自动保存开关与撤销栈的读写
 │   ├── theme.go                外观配置清洗与自定义主题脚本下发
 │   ├── settings.go             存储路径切换与迁移、目录浏览、外观保存
+│   ├── update.go               版本更新检测（releases.js 拉取与 gh-proxy 兜底）
+│   ├── publish.go              发布适配器管理（下载 / 配置 / 卸载）
 │   ├── docs/theme-guide.md     外观主题定制说明（内置主题 + 自定义 JS）
-│   └── web/                    前端（index.html / style.css / app.js / editor.js / views/）
+│   └── web/                    前端（index.html / style.css / app.js / editor.js / publish.js / views/）
+├── publishers/                 发布适配器仓库（index.js 清单 + notionnext.js，契约见 publishers/README.md）
 ├── packaging/                  fpk 骨架
 │   ├── manifest                应用元数据
 │   ├── ICON.PNG ICON_256.PNG   包图标（64 / 256）
@@ -89,7 +92,7 @@ waterfish_anthology/
 ./build.sh arm
 
 # 指定版本号
-VERSION=1.0.0 ./build.sh
+VERSION=1.0.1 ./build.sh
 
 # 顺带重新生成图标（需 playwright）
 ./build.sh --icons
@@ -173,6 +176,14 @@ appcenter-cli install-fpk dist/waterfish_anthology_x86.fpk
   * **自定义主题**：上传 `.js` 文件（≤ 64 KB，最多 20 个）即以文件名生成新主题，重名自动加 `(2)` 后缀，可切换、可删除；脚本在内置主题之后执行，出错不影响使用，删除时自动清理引入的变量
 * 图床设置内置「获取教程」外链，指向 Cloudinary 凭证申请图文教程。
 
+### 5. 更新检测与文章发布（Beta）
+
+* **检查更新**：设置页「更新与实验 → 检测更新」一键检查。应用读取仓库 `latest` 分支的 `releases.js`（最新版本号 / 更新内容 / 安装包地址），GitHub 直连失败时自动走 gh-proxy 加速；拉取在 NAS 服务端完成（自带公共 DNS 备用线路），不经过浏览器。发现新版本时展示更新内容与 x86 / ARM 安装包下载（直链 + 加速双通道）。
+* **文章发布（Beta）**：默认关闭。在「更新与实验 → 实验性功能」打开开关后，文章编辑页标题栏出现「发布」按钮：
+  * **复制发布**——先把文章以富文本写入剪贴板（与「复制」按钮同格式），再把文中引用的本地图片按出现顺序逐张复制；在 Notion 等编辑器粘贴文章后，依次粘贴图片即可
+  * **发布到…**——下载 NotionNext 等适配器（代码托管在项目仓库 `publishers/`，**不内置在应用内**，可独立更新；下载同样走直连 + gh-proxy 兜底），填好标题、标签与适配器密钥后直接发布到建站系统；文中本地图片会自动转为图床公网链接（已上传过则直接用现成地址）
+* 适配器契约与自制方法见 [publishers/README.md](publishers/README.md)。
+
 ---
 
 ## 五、数据存储
@@ -248,7 +259,7 @@ appcenter-cli install-fpk dist/waterfish_anthology_x86.fpk
 `cmd/config_callback` 会自动重启服务；若失败，到应用中心手动停止再启动一次。
 
 **检测新版本 / 关于**
-按需求暂缓，当前为占位页。
+设置页「更新与实验」可一键检查新版本（读取仓库 latest 分支版本信息，直连失败自动加速），「关于」展示应用名称与当前版本。
 
 ---
 

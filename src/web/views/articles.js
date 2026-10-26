@@ -2,8 +2,9 @@
 
 import { api } from '../api.js';
 import * as ui from '../ui.js';
-import { renderMarkdown } from '../markdown.js';
+import { renderMarkdown, buildCopyHTML } from '../markdown.js';
 import { createHistory } from '../editor.js';
+import { openPublishDialog, expPublishEnabled } from '../publish.js';
 
 const local = { list: [], keyword: '' };
 
@@ -143,22 +144,6 @@ async function doCopy(id, ctx) {
   }
 }
 
-// 把 Markdown 渲染为剪贴板用的 HTML 片段：
-// 云端图片（http(s)）保留 <img>，本地图片替换为文字占位，避免无效外链。
-function buildCopyHTML(markdown) {
-  const tpl = document.createElement('template');
-  tpl.innerHTML = renderMarkdown(markdown);
-  tpl.content.querySelectorAll('img').forEach((img) => {
-    const src = img.getAttribute('src') || '';
-    if (/^(https?:)?\/\//i.test(src)) return; // 云端图片保留
-    const name = decodeURIComponent(src.split('/').pop()) || '本地图片';
-    const span = document.createElement('span');
-    span.textContent = `[图片：${name}]`;
-    img.replaceWith(span);
-  });
-  return '<html><body><!--StartFragment-->' + tpl.innerHTML + '<!--EndFragment--></body></html>';
-}
-
 /* ==================== 编辑器 ==================== */
 
 async function renderEditor(el, ctx, id) {
@@ -190,6 +175,7 @@ async function renderEditor(el, ctx, id) {
         <span class="editor-status" id="status">${isNew ? '尚未保存' : `更新于 ${ui.fmtDate(art.updated)}`}</span>
         <button class="btn btn-ghost btn-sm" id="autoSaveBtn" title="自动保存">${ui.icon('check', 13)}<span id="autoSaveLabel">自动保存</span></button>
         <button class="btn btn-ghost btn-sm" id="copyBtn" title="复制文章（兼容 Notion 粘贴）">${ui.icon('copy', 14)}<span>复制</span></button>
+        ${expPublishEnabled() ? `<button class="btn btn-ghost btn-sm" id="publishBtn" title="发布文章">${ui.icon('rocket', 14)}<span>发布</span></button>` : ''}
         <button class="btn btn-ghost btn-sm" id="viewBtn" title="切换编辑 / 分栏 / 预览">${ui.icon('columns', 14)}<span id="viewLabel">分栏</span></button>
         ${isNew ? '' : `<button class="btn btn-danger btn-sm" id="delBtn">${ui.icon('trash', 14)}<span>删除</span></button>`}
         <button class="btn btn-primary btn-sm" id="saveBtn">${ui.icon('save', 14)}<span>保存</span></button>
@@ -518,6 +504,17 @@ async function renderEditor(el, ctx, id) {
     }
     await doCopy(art.id, ctx);
   };
+  $('#publishBtn') && ($('#publishBtn').onclick = async () => {
+    if (isNew || dirty) {
+      const ok = await save();
+      if (!ok) return;
+    }
+    await openPublishDialog(ctx, {
+      id: art.id,
+      title: titleEl.value.trim() || art.title,
+      content: mdEl.value,
+    });
+  });
   $('#delBtn') && ($('#delBtn').onclick = async () => {
     const ok = await ui.confirmDialog({
       title: '删除这篇文章？',
