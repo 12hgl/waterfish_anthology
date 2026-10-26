@@ -15,10 +15,10 @@ import (
 )
 
 const (
-	// publishersIndexURL 仓库适配器清单（CI 随 latest 分支同步）。
-	publishersIndexURL = "https://raw.githubusercontent.com/12hgl/waterfish_anthology/latest/publishers/index.js"
+	// publishersIndexURL 仓库适配器清单（跟随 main 分支：适配器独立于安装包更新）。
+	publishersIndexURL = "https://raw.githubusercontent.com/12hgl/waterfish_anthology/main/publishers/index.js"
 	// publisherFileBase 适配器文件下载基址。
-	publisherFileBase = "https://raw.githubusercontent.com/12hgl/waterfish_anthology/latest/publishers/"
+	publisherFileBase = "https://raw.githubusercontent.com/12hgl/waterfish_anthology/main/publishers/"
 	// maxPublisherBytes 适配器体积上限（256 KiB），防误下大文件。
 	maxPublisherBytes = 256 << 10
 )
