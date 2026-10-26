@@ -329,7 +329,9 @@ export async function render(el, ctx) {
       return;
     }
     if (!r.hasUpdate) {
-      box.innerHTML = `<div class="update-card is-ok">${ui.icon('check', 18)}<div class="update-body"><b>已是最新版本</b><p>当前 v${ui.esc(r.current)}${r.latest ? ` · 仓库最新 v${ui.esc(r.latest)}` : ''}</p></div></div>`;
+      // 仓库最新号与当前一致时才并列展示；低于当前（本地开发版）不显示，避免误解
+      const same = r.latest && r.latest === r.current;
+      box.innerHTML = `<div class="update-card is-ok">${ui.icon('check', 18)}<div class="update-body"><b>已是最新版本</b><p>当前 v${ui.esc(r.current)}${same ? ` · 仓库最新 v${ui.esc(r.latest)}` : ''}</p></div></div>`;
       return;
     }
     const link = (label, url, icon) => url

@@ -193,7 +193,11 @@ func (a *App) checkUpdate() *UpdateCheckResult {
 	res := &UpdateCheckResult{Current: Version}
 	content, err := fetchWithProxy(releasesFileURL)
 	if err != nil {
-		res.Error = fmt.Sprintf("检查更新失败：%v", err)
+		if strings.Contains(err.Error(), "HTTP 404") {
+			res.Error = "仓库尚未发布版本信息（latest 分支上还没有 releases.js），暂时无法检查更新"
+		} else {
+			res.Error = fmt.Sprintf("检查更新失败：%v", err)
+		}
 		return res
 	}
 	info, err := parseReleaseJS(content)

@@ -25,6 +25,11 @@ jobs:
   update-latest:
     runs-on: ubuntu-latest
     steps:
+      # 适配器代码（publishers/）需要随 latest 分支一起发布，
+      # 应用内「下载适配器」就是从 latest/publishers/ 拉取的
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
       - name: 确定要同步的版本
         id: ver
         run: |
@@ -84,6 +89,14 @@ jobs:
 
           历史版本见 [Releases](https://github.com/${{ github.repository }}/releases)。
           EOF
+
+      # 应用内「下载适配器」读取 latest/publishers/，适配器可独立于安装包更新
+      - name: 同步发布适配器
+        run: |
+          mkdir -p latest-root/publishers
+          cp publishers/*.js latest-root/publishers/
+          [ -f publishers/README.md ] && cp publishers/README.md latest-root/publishers/ || true
+          ls -la latest-root/publishers
 
       # 应用内的「检查更新」读取本文件：最新版本号、更新内容、安装包下载地址
       - name: 生成版本信息 releases.js

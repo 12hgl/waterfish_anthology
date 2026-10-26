@@ -264,7 +264,11 @@ func (a *App) handlePublishers(w http.ResponseWriter, r *http.Request) {
 		}
 		content, err := fetchWithProxy(publishersIndexURL)
 		if err != nil {
-			resp.Error = fmt.Sprintf("获取适配器清单失败：%v", err)
+			if strings.Contains(err.Error(), "HTTP 404") {
+				resp.Error = "仓库尚未发布适配器清单（latest 分支上还没有 publishers/index.js）"
+			} else {
+				resp.Error = fmt.Sprintf("获取适配器清单失败：%v", err)
+			}
 		} else if list, perr := parsePublishersIndex(content); perr != nil {
 			resp.Error = fmt.Sprintf("适配器清单无效：%v", perr)
 		} else {
@@ -290,7 +294,11 @@ func (a *App) handlePublishers(w http.ResponseWriter, r *http.Request) {
 		}
 		content, err := fetchWithProxy(publisherFileBase + id + ".js")
 		if err != nil {
-			writeErr(w, http.StatusBadGateway, fmt.Sprintf("下载适配器失败：%v", err))
+			if strings.Contains(err.Error(), "HTTP 404") {
+				writeErr(w, http.StatusNotFound, "仓库中没有这个适配器（latest 分支未同步或 ID 不正确）")
+			} else {
+				writeErr(w, http.StatusBadGateway, fmt.Sprintf("下载适配器失败：%v", err))
+			}
 			return
 		}
 		if len(content) > maxPublisherBytes {
