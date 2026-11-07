@@ -17,8 +17,6 @@ import (
 const (
 	// releasesFileURL latest 分支上的版本信息文件（由 CI 在发布 Release 后自动更新）。
 	releasesFileURL = "https://raw.githubusercontent.com/12hgl/waterfish_anthology/latest/releases.js"
-	// ghProxyPrefix 国内网络直连 GitHub raw 失败时的加速前缀。
-	ghProxyPrefix = "https://gh-proxy.com/"
 	// updateClientTimeout 更新检测专用短超时：直连失败时尽快切换加速线路。
 	updateClientTimeout = 8 * time.Second
 )
@@ -52,15 +50,20 @@ type UpdateCheckResult struct {
 	Error     string `json:"error,omitempty"` // 拉取/解析失败时的说明（此时其余字段为空）
 }
 
-// fetchWithProxy 拉取文本：先直连，失败走 gh-proxy 加速兜底。
+// fetchWithProxy 拉取文本：先直连；直连失败且管理员开启了加速源时走加速线路。
+// 加速源默认关闭，未开启时直接报直连失败原因，不擅自把请求发往第三方服务。
 func fetchWithProxy(url string) (string, error) {
 	body, err := fetchRemoteText(url)
 	if err == nil {
 		return body, nil
 	}
-	proxyBody, proxyErr := fetchRemoteText(ghProxyPrefix + url)
+	prefix := activeProxyPrefix()
+	if prefix == "" {
+		return "", fmt.Errorf("直连失败（%v），可在「设置 → 管理员 → GitHub 加速源」开启加速", friendlyNetErr(err))
+	}
+	proxyBody, proxyErr := fetchRemoteText(prefix + url)
 	if proxyErr != nil {
-		return "", fmt.Errorf("直连失败（%v），加速线路也失败（%v）", friendlyNetErr(err), friendlyNetErr(proxyErr))
+		return "", fmt.Errorf("直连失败（%v），加速线路 %s 也失败（%v）", friendlyNetErr(err), prefix, friendlyNetErr(proxyErr))
 	}
 	return proxyBody, nil
 }

@@ -23,6 +23,12 @@ type ArticleMeta struct {
 	Updated string `json:"updated"`
 	Size    int64  `json:"size"`
 	Excerpt string `json:"excerpt"`
+
+	// 外链文章：文章库只记录磁盘路径，正文始终读写原文件（不复制内容）
+	External bool   `json:"external,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Format   string `json:"format,omitempty"`
+	Missing  bool   `json:"missing,omitempty"`
 }
 
 // Article 文章全文。
@@ -34,6 +40,19 @@ type Article struct {
 // ---------- frontmatter 读写 ----------
 
 func nowStamp() string { return time.Now().Format(time.RFC3339) }
+
+// unquoteYAML 去掉 frontmatter 值的引号（导入时会写成 title: "xxx" 以免冒号破坏 YAML）。
+func unquoteYAML(v string) string {
+	if len(v) >= 2 {
+		if (v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'') {
+			inner := v[1 : len(v)-1]
+			inner = strings.ReplaceAll(inner, "\\\"", "\"")
+			inner = strings.ReplaceAll(inner, "\\\\", "\\")
+			return inner
+		}
+	}
+	return v
+}
 
 // parseArticle 解析 `.md` 文件：可选的 YAML 风格 frontmatter + 正文。
 func parseArticle(id string, raw []byte) Article {
@@ -49,7 +68,7 @@ func parseArticle(id string, raw []byte) Article {
 				if !ok {
 					continue
 				}
-				k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+				k, v = strings.TrimSpace(k), unquoteYAML(strings.TrimSpace(v))
 				switch k {
 				case "title":
 					if v != "" {
@@ -207,11 +226,54 @@ func (u *UserApp) listArticles() ([]ArticleMeta, error) {
 		}
 		out = append(out, art.ArticleMeta)
 	}
+	// 合并「外链文章」：只读磁盘上的原文件，不复制内容
+	for _, ln := range u.linkedList() {
+		meta := ArticleMeta{
+			ID: ln.ID, Title: ln.Title, Created: ln.Created, Updated: ln.Created,
+			External: true, Path: ln.Path,
+		}
+		if f, ok := formatOf(ln.Path); ok {
+			meta.Format = f.Label
+		}
+		if st, err := os.Stat(ln.Path); err == nil && !st.IsDir() {
+			meta.Size = st.Size()
+			meta.Updated = st.ModTime().Format(time.RFC3339)
+			if meta.Created == "" {
+				meta.Created = meta.Updated
+			}
+		} else {
+			meta.Missing = true
+		}
+		if strings.TrimSpace(meta.Title) == "" {
+			meta.Title = strings.TrimSuffix(filepath.Base(ln.Path), filepath.Ext(ln.Path))
+		}
+		if meta.Excerpt == "" {
+			meta.Excerpt = "外部文件 · " + meta.Path
+		}
+		out = append(out, meta)
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Updated > out[j].Updated })
 	return out, nil
 }
 
 func (u *UserApp) getArticle(id string) (Article, error) {
+	// 外链文章：内容来自磁盘原文件
+	if ln, ok := u.findLink(id); ok {
+		file, err := u.openExternal(ln.Path)
+		if err != nil {
+			return Article{}, err
+		}
+		art := Article{ArticleMeta: ArticleMeta{
+			ID: id, Title: file.Title, Created: ln.Created, Updated: file.ModTime,
+			Size: file.Size, External: true, Path: file.Path,
+		}}
+		art.Content = file.Content
+		if file.Format != "" {
+			art.Format = file.FormatLabel
+		}
+		art.Excerpt = excerptOf(art.Content, 90)
+		return art, nil
+	}
 	p, err := u.articlePath(id)
 	if err != nil {
 		return Article{}, err
@@ -388,6 +450,11 @@ func (a *App) handleArticle(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, art)
 	case r.Method == http.MethodPut:
+		if ln, ok := ua.findLink(id); ok {
+			// 外链文章：写回磁盘原文件，而不是在文集目录里另存副本
+			writeErr(w, http.StatusBadRequest, "这是外部文件，请在编辑器里保存："+ln.Path)
+			return
+		}
 		var in struct {
 			Title   string `json:"title"`
 			Content string `json:"content"`
@@ -403,6 +470,11 @@ func (a *App) handleArticle(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, art)
 	case r.Method == http.MethodDelete:
+		if _, ok := ua.removeLink(id); ok {
+			// 外链文章：只移出文章库，磁盘上的原文件保持不动
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "keptFile": true})
+			return
+		}
 		if err := ua.deleteArticle(id); err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return

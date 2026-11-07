@@ -846,6 +846,11 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .modal-head p { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-3); line-height: 1.62; }
 .modal-body { padding: 18px 24px; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 9px; padding: 0 24px 20px; }
+/* 表单型弹窗：字段多时在弹窗内单独滚动，标题与操作按钮始终可见 */
+.field-stack { max-height: 58vh; overflow-y: auto; padding-right: 6px; margin-right: -6px; }
+.field-stack .field:last-child { margin-bottom: 0; }
+.field-stack::-webkit-scrollbar { width: 8px; }
+.field-stack::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 99px; }
 
 .spinner {
   width: 14px; height: 14px;
@@ -1329,3 +1334,60 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 }
 .imp-root:hover { background: var(--surface-2); color: var(--accent); }
 .imp-hint { margin: 10px 0 0; font-size: 12px; color: var(--ink-3); }
+
+/* ================================================================
+   外部文件：只读预览 / 文章库外链角标
+   ================================================================ */
+
+.article-card.is-external { border-style: dashed; }
+.card-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-right: 7px; padding: 1px 7px 1px 5px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
+  color: var(--ink-3); background: var(--surface-3);
+  border: 1px solid var(--line); border-radius: 99px;
+  vertical-align: 2px;
+}
+.card-badge.is-missing { color: var(--err); border-color: var(--err); }
+
+.ro-warn {
+  margin: 0 24px 12px; padding: 10px 14px;
+  background: var(--accent-soft); border: 1px solid var(--accent-line);
+  border-radius: var(--r-sm);
+}
+.ro-warn p { display: flex; gap: 8px; margin: 0 0 6px; font-size: 12.5px; color: var(--ink-2); line-height: 1.6; }
+.ro-warn p:last-child { margin-bottom: 0; }
+.ro-warn svg { flex: none; margin-top: 2px; color: var(--accent-ink); }
+
+.ro-body {
+  padding: 8px 32px 40px;
+  max-width: 780px; margin: 0 auto;
+}
+.ro-pdfwrap { flex: 1; min-height: 0; padding: 0 24px 24px; }
+.ro-pdf {
+  width: 100%; height: 100%; min-height: 62vh;
+  border: 1px solid var(--line-strong); border-radius: var(--r);
+  background: var(--surface-2);
+}
+.ro-foot { padding: 0 24px 24px; }
+.ro-foot p { margin: 0; font-size: 12px; color: var(--ink-3); line-height: 1.7; }
+
+/* GitHub 加速源（管理员） */
+.gh-opt {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; margin-bottom: 6px;
+  border: 1px solid var(--line-strong); border-radius: var(--r-sm);
+  cursor: pointer; transition: border-color .16s var(--ease), background .16s var(--ease);
+}
+.gh-opt:hover { border-color: var(--accent-line); }
+.gh-opt.is-active { border-color: var(--accent-line); background: var(--accent-soft); }
+.gh-opt input { accent-color: var(--accent); }
+.gh-opt-name { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.gh-opt-desc { font-size: 11.5px; color: var(--ink-3); }
+.gh-list { margin-top: 4px; }
+.gh-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; margin-bottom: 6px;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-sm);
+}
+.gh-url { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

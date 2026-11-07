@@ -113,8 +113,8 @@ export function openImportDialog(onDone) {
 
   const close = ui.modal(`
     <div class="modal-head">
-      <h3>导入 Markdown 文章</h3>
-      <p>从飞牛磁盘中选择文件，复制为文集文章（原文件保持不变）。</p>
+      <h3>导入文档为文章</h3>
+      <p>从飞牛磁盘中选择文档，解析后保存为文集文章（原文件保持不变）。Markdown / 纯文本按原文导入，Word / PDF / EPUB 等会先解析出正文。</p>
     </div>
     <div class="modal-body">
       <div class="imp-bar">
@@ -122,7 +122,7 @@ export function openImportDialog(onDone) {
         <span class="imp-dir" id="impDir">尚未选择文件夹</span>
       </div>
       <div class="imp-list" id="impList">
-        <div class="imp-empty">选择文件夹后会列出其中的 Markdown 文件（含子目录，最多 3 层）</div>
+        <div class="imp-empty">选择文件夹后会列出其中可导入的文档（含子目录，最多 3 层）</div>
       </div>
       <p class="imp-hint" id="impHint"></p>
     </div>

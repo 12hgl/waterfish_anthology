@@ -14,7 +14,7 @@
             }
         },
         "waterfish_anthology.edit": {
-            "title": "水鱼文集（编辑 Markdown）",
+            "title": "水鱼文集（打开文档）",
             "icon": "images/icon_{0}.png",
             "type": "iframe",
             "protocol": "",
@@ -22,7 +22,7 @@
             "gatewaySocket": "app.sock",
             "url": "/app/waterfish_anthology",
             "allUsers": true,
-            "fileTypes": ["md", "markdown", "mdown", "mdx", "txt"],
+            "fileTypes": ["md", "markdown", "mdown", "mdx", "txt", "tex", "html", "htm", "docx", "odt", "rtf", "epub", "pdf", "doc", "pages"],
             "noDisplay": true,
             "control": {
                 "accessPerm": "readonly"

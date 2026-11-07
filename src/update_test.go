@@ -120,21 +120,34 @@ func TestRealPublisherFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("index.js 解析失败: %v", err)
 	}
-	if len(list) != 1 || list[0].ID != "notionnext" || list[0].File != "notionnext.js" {
-		t.Fatalf("index.js 内容异常: %+v", list)
+	byID := map[string]string{}
+	for _, p := range list {
+		byID[p.ID] = p.File
+	}
+	for id, file := range map[string]string{"notionnext": "notionnext.js", "wordpress": "wordpress.js"} {
+		if byID[id] != file {
+			t.Fatalf("index.js 缺少 %s（%s）: %+v", id, file, list)
+		}
 	}
 
-	adapterData, err := os.ReadFile("../publishers/notionnext.js")
-	if err != nil {
-		t.Skip("适配器文件不在预期位置")
-	}
-	content := string(adapterData)
-	if !containsAll(content, "window.WFPublishers", "publish") {
-		t.Fatal("适配器缺少契约标记")
-	}
-	name, version := extractPublisherMeta(content)
-	if name != "NotionNext" || version != "1.0.0" {
-		t.Errorf("适配器元数据解析错误: name=%q version=%q", name, version)
+	// 清单里登记的每个适配器都必须存在、且符合契约
+	for _, p := range list {
+		adapterData, err := os.ReadFile("../publishers/" + p.File)
+		if err != nil {
+			t.Errorf("适配器文件缺失: %s", p.File)
+			continue
+		}
+		content := string(adapterData)
+		if !containsAll(content, "window.WFPublishers", "publish", "configFields") {
+			t.Errorf("%s 缺少契约标记", p.File)
+		}
+		name, version := extractPublisherMeta(content)
+		if name == "" || version == "" {
+			t.Errorf("%s 元数据解析失败: name=%q version=%q", p.File, name, version)
+		}
+		if name != p.Name {
+			t.Errorf("%s 名称不一致: 清单=%q 文件=%q", p.File, p.Name, name)
+		}
 	}
 }
 

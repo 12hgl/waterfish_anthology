@@ -85,13 +85,29 @@ func TestMergeFrontMatter(t *testing.T) {
 }
 
 func TestExternalExts(t *testing.T) {
-	for _, ext := range []string{".md", ".markdown", ".txt", ".MD"} {
-		if !externalExts[strings.ToLower(ext)] {
-			t.Errorf("%s 应被支持", ext)
+	// 可编辑：纯文本类，写完直接回写原文件
+	for _, ext := range []string{".md", ".markdown", ".mdown", ".mdx", ".txt", ".tex", ".MD"} {
+		f, ok := formatOf("x" + strings.ToLower(ext))
+		if !ok || f.Mode != modeEditable {
+			t.Errorf("%s 应可编辑写回（得到 %q）", ext, f.Mode)
 		}
 	}
-	for _, ext := range []string{".pdf", ".png", ".docx", ""} {
-		if externalExts[ext] {
+	// 只读预览：含版式或二进制容器，解析成 Markdown 后另存为文章
+	for _, ext := range []string{".docx", ".odt", ".epub", ".pdf", ".rtf", ".html", ".htm"} {
+		f, ok := formatOf("x" + ext)
+		if !ok || f.Mode != modeReadonly {
+			t.Errorf("%s 应为只读预览（得到 %q）", ext, f.Mode)
+		}
+	}
+	// 闭源二进制与新格式外的一律拒绝
+	for _, ext := range []string{".doc", ".pages"} {
+		f, ok := formatOf("x" + ext)
+		if !ok || f.Mode != modeBinary {
+			t.Errorf("%s 应标记为不可解析", ext)
+		}
+	}
+	for _, ext := range []string{".png", ".exe", ""} {
+		if _, ok := formatOf("x" + ext); ok {
 			t.Errorf("%s 不应被支持", ext)
 		}
 	}

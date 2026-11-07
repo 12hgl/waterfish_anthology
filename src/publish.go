@@ -295,7 +295,7 @@ func (a *App) handlePublishers(w http.ResponseWriter, r *http.Request) {
 		content, err := fetchWithProxy(publisherFileBase + id + ".js")
 		if err != nil {
 			if strings.Contains(err.Error(), "HTTP 404") {
-				writeErr(w, http.StatusNotFound, "仓库中没有这个适配器（latest 分支未同步或 ID 不正确）")
+				writeErr(w, http.StatusNotFound, "仓库适配器清单中没有该项（可能尚未同步，或 ID 不正确）")
 			} else {
 				writeErr(w, http.StatusBadGateway, fmt.Sprintf("下载适配器失败：%v", err))
 			}

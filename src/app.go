@@ -106,6 +106,7 @@ func NewApp() *App {
 			log.Fatalf("创建目录失败 %s: %v", d, err)
 		}
 	}
+	loadGitHubProxy(a.EtcDir)
 	return a
 }
 

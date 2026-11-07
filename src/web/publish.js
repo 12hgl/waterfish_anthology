@@ -88,12 +88,15 @@ export async function openPublisherConfigDialog(meta, onSaved) {
   ui.modal(`
     <div class="modal-head"><h3>${ui.esc(meta.name || meta.id)} · 配置</h3>
     <p>密钥仅保存在本机，不会随文章上传。</p></div>
-    ${configFieldsHTML(fields, meta.config, 'cfg')}
+    <div class="modal-body">
+      <div class="field-stack">${configFieldsHTML(fields, meta.config, 'cfg')}</div>
+    </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" data-act="cancel">取消</button>
       <button class="btn btn-primary" data-act="save">保存配置</button>
     </div>
   `, {
+    wide: true,
     onMount(mroot, mclose) {
       mroot.querySelector('[data-act="cancel"]').onclick = mclose;
       mroot.querySelector('[data-act="save"]').onclick = async (e) => {

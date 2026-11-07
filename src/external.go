@@ -1,10 +1,14 @@
 package main
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -34,13 +38,14 @@ const (
 var (
 	// errNeedGrant 目标路径不在可访问范围内，需要用户先授权。
 	errNeedGrant = errors.New("需要授权访问该文件所在位置")
-	// errNotText 不是受支持的文本 / Markdown 文件。
-	errNotText = errors.New("只支持 .md / .markdown / .txt 文件")
+	// errNotText 不是受支持的文件格式。
+	errNotText = errors.New("不支持该文件格式")
 )
 
-// externalExts 允许打开与导入的扩展名。
-var externalExts = map[string]bool{
-	".md": true, ".markdown": true, ".mdown": true, ".mdx": true, ".txt": true,
+// allowedExternal 判断扩展名是否受支持（见 convert.go 的 formatTable）。
+func allowedExternal(path string) bool {
+	_, ok := formatOf(path)
+	return ok
 }
 
 type extGrants struct {
@@ -175,6 +180,17 @@ type ExternalFile struct {
 	Readable bool   `json:"readable"`
 	Writable bool   `json:"writable"`
 	HasMeta  bool   `json:"hasFrontMatter"`
+
+	// 打开方式：editable（可编辑写回）/ readonly（只读预览，另存为文集文章）
+	Mode        string   `json:"mode"`
+	Format      string   `json:"format"`
+	FormatLabel string   `json:"formatLabel"`
+	Warnings    []string `json:"warnings,omitempty"`
+	// RawURL 浏览器可直接渲染的原始文件地址（目前仅 PDF）
+	RawURL string `json:"rawUrl,omitempty"`
+	// Linked 是否已加入文章库（外链文章，不复制内容）
+	Linked   bool   `json:"linked"`
+	LinkedID string `json:"linkedId,omitempty"`
 	// DisplayPath 语义化路径（如「存储空间1/admin 的文件/notes/a.md」）。
 	// 系统接口不可用时为空，前端退回展示原始路径。
 	DisplayPath string `json:"displayPath,omitempty"`
@@ -245,13 +261,17 @@ func mergeFrontMatter(orig, title, content string) (string, bool) {
 	return b.String(), true
 }
 
-// openExternal 读取外部文件：范围校验 → 类型/大小校验 → 内容与权限。
+// openExternal 读取外部文件：范围校验 → 类型/大小校验 → 按可编辑程度返回内容。
+//   - editable：返回正文（可编辑写回原文件）
+//   - readonly：解析成 Markdown 供只读预览，原文件保持不变
+//   - binary：直接拒绝，提示另存为别的格式
 func (u *UserApp) openExternal(raw string) (ExternalFile, error) {
 	abs, err := resolveExternalPath(raw)
 	if err != nil {
 		return ExternalFile{}, err
 	}
-	if !externalExts[strings.ToLower(filepath.Ext(abs))] {
+	f, ok := formatOf(abs)
+	if !ok {
 		return ExternalFile{}, errNotText
 	}
 	if !u.withinExternal(abs) {
@@ -264,15 +284,53 @@ func (u *UserApp) openExternal(raw string) (ExternalFile, error) {
 	if info.IsDir() {
 		return ExternalFile{}, errors.New("这是一个文件夹，不是文件")
 	}
-	if info.Size() > maxExternalSize {
-		return ExternalFile{}, errors.New("文件超过 8 MB，建议用其他编辑器处理")
+	limit := int64(maxExternalSize)
+	if f.Mode != modeEditable {
+		limit = maxConvertSource
 	}
+	if info.Size() > limit {
+		return ExternalFile{}, fmt.Errorf("文件超过 %d MB，暂不支持打开", limit>>20)
+	}
+
+	base := ExternalFile{
+		Path:        abs,
+		Name:        filepath.Base(abs),
+		Size:        info.Size(),
+		ModTime:     info.ModTime().Format(time.RFC3339),
+		Mode:        f.Mode,
+		Format:      f.Kind,
+		FormatLabel: f.Label,
+		DisplayPath: semanticPath(abs),
+	}
+
+	// 闭源二进制：说明清楚为什么打不开，并给出可执行的替代做法
+	if f.Mode == modeBinary {
+		return base, fmt.Errorf("%s 属于闭源二进制格式，无法解析正文；请先用对应软件打开并另存为 .docx 或 PDF，再从水鱼文集打开", f.Label)
+	}
+
+	if f.Mode == modeReadonly {
+		res, err := convertFile(abs, f)
+		if err != nil {
+			return base, err
+		}
+		base.Title = res.Title
+		base.Content = res.Markdown
+		base.Warnings = res.Warnings
+		base.Readable = true
+		if f.Kind == "pdf" {
+			// PDF 用浏览器原生阅读器预览，版式与原文件完全一致
+			base.RawURL = "api/external/raw?path=" + url.QueryEscape(abs)
+		}
+		u.markLinked(&base)
+		return base, nil
+	}
+
 	rawBytes, err := os.ReadFile(abs)
 	if err != nil {
 		return ExternalFile{}, errNeedGrant // 授权范围内但应用用户无 ACL：引导再授权
 	}
 	if !utf8.Valid(rawBytes) {
-		return ExternalFile{}, errors.New("文件不是 UTF-8 文本，暂不支持编辑")
+		return ExternalFile{}, errors.New("文件不是 UTF-8 文本，暂无法编辑；请另存为 UTF-8 后重试")
 	}
 
 	text := string(rawBytes)
@@ -296,17 +354,13 @@ func (u *UserApp) openExternal(raw string) (ExternalFile, error) {
 	}
 
 	acl := u.aclOf(abs)
-	return ExternalFile{
-		Path:     abs,
-		Name:     filepath.Base(abs),
-		Title:    title,
-		Content:  body,
-		Size:     info.Size(),
-		ModTime:  info.ModTime().Format(time.RFC3339),
-		Readable: acl.Readable,
-		Writable: acl.Writable,
-		HasMeta:  hasMeta,
-	}, nil
+	base.Title = title
+	base.Content = body
+	base.Readable = acl.Readable
+	base.Writable = acl.Writable
+	base.HasMeta = hasMeta
+	u.markLinked(&base)
+	return base, nil
 }
 
 // saveExternal 把编辑后的正文写回原文件（原子写入，保留文件权限）。
@@ -315,8 +369,9 @@ func (u *UserApp) saveExternal(raw, title, content string) (ExternalFile, error)
 	if err != nil {
 		return ExternalFile{}, err
 	}
-	if !externalExts[strings.ToLower(filepath.Ext(abs))] {
-		return ExternalFile{}, errNotText
+	f, ok := formatOf(abs)
+	if !ok || f.Mode != modeEditable {
+		return ExternalFile{}, errors.New("该格式不支持直接写回，请用「另存为文集文章」")
 	}
 	if !u.withinExternal(abs) {
 		return ExternalFile{}, errNeedGrant
@@ -377,7 +432,182 @@ func (u *UserApp) checkWritable(path string) error {
 	return nil
 }
 
-// scanExternalDir 扫描目录下的 Markdown 文本文件，供「导入文章」选择。
+// ---------- 外链文章（加入文章库但不复制内容） ----------
+
+// linkedArticle 指向磁盘文件的书目条目：文章库只记录路径，正文始终从原文件读取，
+// 因此在水鱼文集里的改动会直接落到原文件，外部改动也能立刻看到。
+type linkedArticle struct {
+	ID      string `json:"id"`
+	Path    string `json:"path"`
+	Title   string `json:"title"`
+	Created string `json:"created"`
+}
+
+type linkIndex struct {
+	Items []linkedArticle `json:"items"`
+}
+
+const maxLinkedArticles = 500
+
+var linksMu sync.Mutex
+
+func (u *UserApp) linksPath() string { return filepath.Join(u.userDir(), "links.json") }
+
+// linkIDFor 由路径派生稳定 ID：同一文件多次添加不会产生重复条目。
+func linkIDFor(path string) string {
+	sum := sha1.Sum([]byte(path))
+	return "ext-" + hex.EncodeToString(sum[:6])
+}
+
+func (u *UserApp) linkedList() []linkedArticle {
+	linksMu.Lock()
+	defer linksMu.Unlock()
+	raw, err := os.ReadFile(u.linksPath())
+	if err != nil {
+		return nil
+	}
+	var idx linkIndex
+	if json.Unmarshal(raw, &idx) != nil {
+		return nil
+	}
+	return idx.Items
+}
+
+func (u *UserApp) writeLinks(items []linkedArticle) error {
+	if err := os.MkdirAll(u.userDir(), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(linkIndex{Items: items}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(u.linksPath(), data, 0o644)
+}
+
+// addLink 把外部文件加入文章库（幂等）。
+func (u *UserApp) addLink(path, title string) (linkedArticle, error) {
+	path = filepath.Clean(path)
+	id := linkIDFor(path)
+	linksMu.Lock()
+	var items []linkedArticle
+	if raw, err := os.ReadFile(u.linksPath()); err == nil {
+		var idx linkIndex
+		if json.Unmarshal(raw, &idx) == nil {
+			items = idx.Items
+		}
+	}
+	for i := range items {
+		if items[i].ID == id {
+			if title != "" && items[i].Title != title {
+				items[i].Title = title
+				_ = u.writeLinks(items)
+			}
+			out := items[i]
+			linksMu.Unlock()
+			return out, nil
+		}
+	}
+	entry := linkedArticle{ID: id, Path: path, Title: title, Created: nowStamp()}
+	if entry.Title == "" {
+		entry.Title = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	}
+	if len(items) >= maxLinkedArticles {
+		items = items[len(items)-maxLinkedArticles+1:]
+	}
+	items = append(items, entry)
+	err := u.writeLinks(items)
+	linksMu.Unlock()
+	return entry, err
+}
+
+// removeLink 只移除书目条目，磁盘上的原文件不受影响。
+func (u *UserApp) removeLink(id string) (linkedArticle, bool) {
+	linksMu.Lock()
+	defer linksMu.Unlock()
+	raw, err := os.ReadFile(u.linksPath())
+	if err != nil {
+		return linkedArticle{}, false
+	}
+	var idx linkIndex
+	if json.Unmarshal(raw, &idx) != nil {
+		return linkedArticle{}, false
+	}
+	out := linkedArticle{}
+	found := false
+	next := make([]linkedArticle, 0, len(idx.Items))
+	for _, it := range idx.Items {
+		if it.ID == id {
+			out, found = it, true
+			continue
+		}
+		next = append(next, it)
+	}
+	if !found {
+		return linkedArticle{}, false
+	}
+	_ = u.writeLinks(next)
+	return out, true
+}
+
+func (u *UserApp) findLink(id string) (linkedArticle, bool) {
+	for _, it := range u.linkedList() {
+		if it.ID == id {
+			return it, true
+		}
+	}
+	return linkedArticle{}, false
+}
+
+// markLinked 给已打开的文件标注「已加入文章库」。
+func (u *UserApp) markLinked(f *ExternalFile) {
+	if f == nil || f.Path == "" {
+		return
+	}
+	id := linkIDFor(f.Path)
+	for _, it := range u.linkedList() {
+		if it.ID == id {
+			f.Linked = true
+			f.LinkedID = id
+			return
+		}
+	}
+}
+
+// externalRaw 读取原始文件字节，供浏览器原生预览（目前用于 PDF）。
+func (u *UserApp) externalRaw(raw string) ([]byte, string, error) {
+	abs, err := resolveExternalPath(raw)
+	if err != nil {
+		return nil, "", err
+	}
+	f, ok := formatOf(abs)
+	if !ok || f.Mode == modeBinary {
+		return nil, "", errNotText
+	}
+	if !u.withinExternal(abs) {
+		return nil, "", errNeedGrant
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, "", errors.New("文件不存在或无权限读取")
+	}
+	if info.Size() > maxConvertSource {
+		return nil, "", errors.New("文件过大，无法预览")
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return nil, "", errNeedGrant
+	}
+	ct := "application/octet-stream"
+	switch f.Kind {
+	case "pdf":
+		ct = "application/pdf"
+	case "html":
+		ct = "text/html; charset=utf-8"
+	}
+	return data, ct, nil
+}
+
+// scanExternalDir 扫描目录下受支持的文档，供「导入文章」选择。
 func (u *UserApp) scanExternalDir(raw string) (string, []ExternalFile, error) {
 	abs, err := resolveExternalPath(raw)
 	if err != nil {
@@ -425,7 +655,7 @@ func (u *UserApp) scanExternalDir(raw string) (string, []ExternalFile, error) {
 				}
 				continue
 			}
-			if !externalExts[strings.ToLower(filepath.Ext(e.Name()))] {
+			if !allowedExternal(e.Name()) {
 				continue
 			}
 			info, err := e.Info()
@@ -483,26 +713,59 @@ func (u *UserApp) importExternal(paths []string) ([]ArticleMeta, []string) {
 			continue
 		}
 		info, err := os.Stat(abs)
-		if err != nil || info.IsDir() || info.Size() > maxExternalSize {
-			skipped = append(skipped, filepath.Base(raw)+"（不可读或过大）")
+		if err != nil || info.IsDir() {
+			skipped = append(skipped, filepath.Base(raw)+"（不可读）")
 			continue
 		}
-		rawBytes, err := os.ReadFile(abs)
-		if err != nil || !utf8.Valid(rawBytes) {
-			skipped = append(skipped, filepath.Base(raw)+"（读取失败或非 UTF-8）")
+		f, ok := formatOf(abs)
+		if !ok || f.Mode == modeBinary {
+			skipped = append(skipped, filepath.Base(raw)+"（"+f.Label+"暂不支持，请另存为 .docx 或 PDF）")
 			continue
 		}
-		art := parseArticle("", rawBytes)
-		title := strings.TrimSpace(art.Title)
-		if title == "" {
-			title = strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs))
+
+		var payload []byte
+		var title, content string
+		art := Article{ArticleMeta: ArticleMeta{Title: strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs))}}
+
+		if f.Mode == modeReadonly {
+			// 富文本 / 电子书：解析成 Markdown 后存为文集文章，原文件保持不动
+			if info.Size() > maxConvertSource {
+				skipped = append(skipped, filepath.Base(raw)+"（文件过大）")
+				continue
+			}
+			res, cerr := convertFile(abs, f)
+			if cerr != nil {
+				skipped = append(skipped, filepath.Base(raw)+"（"+cerr.Error()+"）")
+				continue
+			}
+			title, content = res.Title, res.Markdown
+			art.Title, art.Content = title, content
+			payload = []byte("---\ntitle: " + yamlQuote(title) + "\nsource: " + yamlQuote(filepath.Base(abs)) +
+				"\ndate: " + nowStamp() + "\n---\n\n" + content + "\n")
+		} else {
+			if info.Size() > maxExternalSize {
+				skipped = append(skipped, filepath.Base(raw)+"（文件过大）")
+				continue
+			}
+			rawBytes, rerr := os.ReadFile(abs)
+			if rerr != nil || !utf8.Valid(rawBytes) {
+				skipped = append(skipped, filepath.Base(raw)+"（读取失败或非 UTF-8）")
+				continue
+			}
+			art = parseArticle("", rawBytes)
+			title = strings.TrimSpace(art.Title)
+			if title == "" {
+				title = strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs))
+			}
+			payload = rawBytes
 		}
+
 		target := u.uniqueArticlePath(slugify(title))
 		if err := os.MkdirAll(u.PassageDir(), 0o755); err != nil {
 			skipped = append(skipped, filepath.Base(abs)+"（文集目录不可写）")
 			continue
 		}
-		if err := os.WriteFile(target, rawBytes, 0o644); err != nil {
+		if err := os.WriteFile(target, payload, 0o644); err != nil {
 			skipped = append(skipped, filepath.Base(abs)+"（写入文集失败）")
 			continue
 		}
@@ -511,7 +774,7 @@ func (u *UserApp) importExternal(paths []string) ([]ArticleMeta, []string) {
 			Title:   title,
 			Created: nowStamp(),
 			Updated: nowStamp(),
-			Size:    int64(len(rawBytes)),
+			Size:    int64(len(payload)),
 		}
 		if art.Created != "" {
 			meta.Created = art.Created
@@ -523,6 +786,14 @@ func (u *UserApp) importExternal(paths []string) ([]ArticleMeta, []string) {
 		imported = append(imported, meta)
 	}
 	return imported, skipped
+}
+
+// yamlQuote 给 frontmatter 里的字符串加引号并转义，避免标题里的冒号 / 引号破坏 YAML。
+func yamlQuote(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "\"", "\\\"")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return "\"" + s + "\""
 }
 
 // ---------- HTTP ----------
@@ -567,8 +838,91 @@ func (a *App) handleExternal(w http.ResponseWriter, r *http.Request) {
 			"uid":      ua.uidOf(),
 			"openAPI":  trimAPIAvailable(),
 			"roots":    len(ua.externalRoots()),
+			"formats":  supportedFormats(),
 			"surfaces": []string{"md", "markdown", "mdown", "mdx", "txt"},
 		})
+
+	case "formats":
+		if r.Method != http.MethodGet {
+			writeErr(w, http.StatusMethodNotAllowed, "方法不允许")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"formats": supportedFormats()})
+
+	case "raw":
+		// 浏览器原生预览（PDF 用内置阅读器渲染，版式不走样）
+		if r.Method != http.MethodGet {
+			writeErr(w, http.StatusMethodNotAllowed, "方法不允许")
+			return
+		}
+		data, ct, err := ua.externalRaw(r.URL.Query().Get("path"))
+		if err != nil {
+			fail(err, r.URL.Query().Get("path"), "file")
+			return
+		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Content-Disposition", "inline")
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+
+	case "link":
+		// 把打开的外部文件加入文章库（不复制内容，正文始终读原文件）
+		if r.Method != http.MethodPost {
+			writeErr(w, http.StatusMethodNotAllowed, "方法不允许")
+			return
+		}
+		var in struct {
+			Path  string `json:"path"`
+			Title string `json:"title"`
+		}
+		if err := readJSON(r, &in); err != nil {
+			writeErr(w, http.StatusBadRequest, "请求体格式错误")
+			return
+		}
+		abs, err := resolveExternalPath(in.Path)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if !allowedExternal(abs) {
+			writeErr(w, http.StatusUnsupportedMediaType, errNotText.Error())
+			return
+		}
+		if !ua.withinExternal(abs) {
+			needGrant(abs, "file")
+			return
+		}
+		if st, err := os.Stat(abs); err != nil || st.IsDir() {
+			writeErr(w, http.StatusBadRequest, "文件不存在或不是文件")
+			return
+		}
+		entry, err := ua.addLink(abs, strings.TrimSpace(in.Title))
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "保存失败："+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, entry)
+
+	case "unlink":
+		if r.Method != http.MethodPost {
+			writeErr(w, http.StatusMethodNotAllowed, "方法不允许")
+			return
+		}
+		var in struct {
+			ID string `json:"id"`
+		}
+		if err := readJSON(r, &in); err != nil || strings.TrimSpace(in.ID) == "" {
+			writeErr(w, http.StatusBadRequest, "缺少文章 ID")
+			return
+		}
+		entry, ok := ua.removeLink(strings.TrimSpace(in.ID))
+		if !ok {
+			writeErr(w, http.StatusNotFound, "该文章不在文章库中")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": entry.Path})
 
 	case "open":
 		if r.Method != http.MethodPost {

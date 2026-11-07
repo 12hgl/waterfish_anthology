@@ -24,7 +24,7 @@ async function renderList(el, ctx) {
         <div class="page-sub">正在加载…</div>
       </div>
       <div class="spacer"></div>
-      <button class="btn btn-ghost" id="importArticle" title="从磁盘导入 Markdown 文件">${ui.icon('download')}<span>导入</span></button>
+      <button class="btn btn-ghost" id="importArticle" title="从磁盘导入文档">${ui.icon('download')}<span>导入</span></button>
       <button class="btn btn-primary" id="newArticle">${ui.icon('plus')}<span>新建文章</span></button>
     </div>
     <div class="article-grid" id="grid">${'<div class="skeleton" style="height:168px"></div>'.repeat(6)}</div>
@@ -80,15 +80,19 @@ async function renderList(el, ctx) {
     grid.querySelectorAll('[data-del]').forEach((n) => {
       n.onclick = async (e) => {
         e.stopPropagation();
+        const meta = local.list.find((x) => x.id === n.dataset.del);
+        const ext = !!(meta && meta.external);
         const ok = await ui.confirmDialog({
-          title: '删除这篇文章？',
-          desc: '对应 .md 文件将从 passage 目录中移除，且无法恢复。',
-          okText: '删除', danger: true,
+          title: ext ? '从文章库移除？' : '删除这篇文章？',
+          desc: ext
+            ? '只移除文章库里的条目，磁盘上的原文件不会被删除。'
+            : '对应 .md 文件将从 passage 目录中移除，且无法恢复。',
+          okText: ext ? '移除' : '删除', danger: true,
         });
         if (!ok) return;
         try {
           await api.deleteArticle(n.dataset.del);
-          ui.toast('已删除', '', 'ok');
+          ui.toast(ext ? '已从文章库移除' : '已删除', ext ? '原文件保持不变' : '', 'ok');
           ctx.refresh();
         } catch (err) { ui.toast('删除失败', err.message, 'err'); }
       };
@@ -104,9 +108,12 @@ async function renderList(el, ctx) {
 }
 
 function cardHTML(a) {
+  const badge = a.external
+    ? `<span class="card-badge ${a.missing ? 'is-missing' : ''}" title="${ui.esc(a.path || '')}">${ui.icon('file', 11)}${ui.esc(a.missing ? '文件已移动' : (a.format || '外部文件'))}</span>`
+    : '';
   return `
-    <article class="article-card" data-open="${ui.esc(a.id)}">
-      <h3>${ui.esc(a.title)}</h3>
+    <article class="article-card ${a.external ? 'is-external' : ''}" data-open="${ui.esc(a.id)}">
+      <h3>${badge}${ui.esc(a.title)}</h3>
       <p>${ui.esc(a.excerpt || '（空白文章）')}</p>
       <div class="article-meta">
         <span title="${ui.esc(ui.fmtDate(a.updated))}">${ui.esc(ui.fmtDateShort(a.updated))}</span>
@@ -167,7 +174,77 @@ export async function renderExternalFile(el, ctx, path) {
     renderGrantGate(el, ctx, path, needGrant, e.message);
     return;
   }
+  // 纯文本可直接编辑写回；含版式的文档（docx/pdf/epub…）只读预览 + 另存为
+  if (file.mode === 'readonly') return renderReadonlyPreview(el, ctx, file);
   return renderEditor(el, ctx, 'external', { path: file.path, file });
+}
+
+// renderReadonlyPreview 富文本 / 电子书 / PDF 的只读预览：
+// 正文解析成 Markdown 后渲染，PDF 直接用浏览器原生阅读器显示原文件（版式不走样）。
+function renderReadonlyPreview(el, ctx, file) {
+  const isPDF = file.format === 'pdf' && file.rawUrl;
+  el.innerHTML = `
+    <div class="editor">
+      <div class="editor-head">
+        <button class="btn btn-quiet" id="back" title="返回列表">${ui.icon('chevronLeft')}<span>返回</span></button>
+        <input class="editor-title" id="roTitle" value="${ui.esc(file.title)}" readonly>
+        <span class="editor-status">${ui.esc(file.formatLabel)} · 只读 · ${ui.fmtSize(file.size)}</span>
+        <button class="btn btn-ghost btn-sm" id="roLink" ${file.linked ? 'disabled' : ''}>
+          ${ui.icon('book', 14)}<span id="roLinkLabel">${file.linked ? '已在文章库' : '加入文章库'}</span></button>
+        <button class="btn btn-primary btn-sm" id="roSaveAs">${ui.icon('download', 14)}<span>另存为文集文章</span></button>
+      </div>
+      <div class="ext-bar">
+        ${ui.icon('file', 15)}
+        <span class="ext-path" title="${ui.esc(file.displayPath || file.path)}">${ui.esc(file.displayPath || file.path)}</span>
+        <span class="ext-warn">${ui.icon('shield', 13)}只读预览，不会改动原文件</span>
+        <button class="btn btn-quiet btn-xs" id="roReveal" title="在文件管理器中显示">${ui.icon('folder', 13)}<span>定位</span></button>
+      </div>
+      ${(file.warnings || []).length ? `<div class="ro-warn">${file.warnings.map((w) => `<p>${ui.icon('alert', 13)}<span>${ui.esc(w)}</span></p>`).join('')}</div>` : ''}
+      ${isPDF
+        ? `<div class="ro-pdfwrap"><iframe class="ro-pdf" src="${ui.esc(file.rawUrl)}" title="${ui.esc(file.title)}"></iframe></div>`
+        : `<div class="ro-body"><div class="markdown">${renderMarkdown(file.content || '')}</div></div>`}
+      <div class="ro-foot">
+        <p>「另存为文集文章」会把解析出的正文复制成一篇新文章，之后可在水鱼文集里编辑；原文件保持不变。</p>
+      </div>
+    </div>`;
+
+  el.querySelector('#back').onclick = () => ctx.navigate('articles');
+  const revealBtn = el.querySelector('#roReveal');
+  revealBtn.onclick = async () => {
+    const ok = await revealInManager(file.path);
+    if (!ok) ui.toast('无法定位文件', '请在飞牛文件管理器中手动查找', 'warn');
+  };
+
+  const linkBtn = el.querySelector('#roLink');
+  linkBtn.onclick = async () => {
+    linkBtn.disabled = true;
+    try {
+      await api.externalLink(file.path, el.querySelector('#roTitle').value.trim() || file.title);
+      el.querySelector('#roLinkLabel').textContent = '已在文章库';
+      ui.toast('已加入文章库', '之后可从文章库直接打开这个文件', 'ok', 4000);
+    } catch (e) {
+      linkBtn.disabled = false;
+      ui.toast('加入失败', e.message, 'err', 6000);
+    }
+  };
+
+  el.querySelector('#roSaveAs').onclick = async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner"></span><span>保存中…</span>`;
+    try {
+      const art = await api.createArticle({
+        title: el.querySelector('#roTitle').value.trim() || file.title,
+        content: file.content || '',
+      });
+      ui.toast('已另存为文集文章', art.title || '', 'ok', 4000);
+      ctx.navigate('articles', { id: art.id });
+    } catch (err) {
+      btn.disabled = false;
+      btn.innerHTML = `${ui.icon('download', 14)}<span>另存为文集文章</span>`;
+      ui.toast('保存失败', err.message, 'err', 6000);
+    }
+  };
 }
 
 // renderGrantGate 授权引导：系统只把用户明确同意的路径授予应用。
@@ -179,7 +256,7 @@ function renderGrantGate(el, ctx, path, needGrant, message) {
       <h2>${needGrant ? '需要授权访问' : '无法打开该文件'}</h2>
       <p class="ext-gate-desc">${needGrant
         ? '水鱼文集以独立的应用用户运行，读取和写回磁盘文件前需要你确认授权。系统会弹出选择窗口，授权范围是该文件所在的文件夹。'
-        : '文件可能已被移动、删除，或不是受支持的文本格式。'}</p>
+        : '文件可能已被移动、删除，或该格式无法解析（.doc / .pages 等闭源格式请先另存为 .docx 或 PDF）。'}</p>
       <div class="ext-gate-path" title="${ui.esc(path)}">${ui.esc(path)}</div>
       ${message && message !== '需要授权访问该文件所在位置' ? `<p class="ext-gate-err">${ui.esc(message)}</p>` : ''}
       <div class="ext-gate-actions">
@@ -238,6 +315,10 @@ async function renderEditor(el, ctx, id, ext) {
       ui.toast('无法打开文章', e.message, 'err');
       return ctx.navigate('articles');
     }
+    // 外链文章：正文在磁盘原文件里，转到外部文件编辑器打开
+    if (art.external && art.path) {
+      return ctx.openExternal(art.path);
+    }
     try {
       const estate = await api.articleEditor(id);
       autoSave = !!estate.autoSave;
@@ -266,7 +347,8 @@ async function renderEditor(el, ctx, id, ext) {
         <span class="ext-path" title="${ui.esc(ext.file.displayPath || ext.path)}">${ui.esc(ext.file.displayPath || ext.path)}</span>
         ${ext.file.writable ? '' : `<span class="ext-warn">${ui.icon('alert', 13)}只读：应用对该文件没有写入权限</span>`}
         <button class="btn btn-quiet btn-xs" id="extReveal" title="在文件管理器中显示">${ui.icon('folder', 13)}<span>定位</span></button>
-        <button class="btn btn-quiet btn-xs" id="extToLib" title="复制一份到文章库后编辑">${ui.icon('download', 13)}<span>导入到文章库</span></button>
+        <button class="btn btn-quiet btn-xs" id="extLink" title="加入文章库：只记录路径，正文仍读写原文件" ${ext.file.linked ? 'disabled' : ''}>${ui.icon('book', 13)}<span>${ext.file.linked ? '已在文章库' : '加入文章库'}</span></button>
+        <button class="btn btn-quiet btn-xs" id="extToLib" title="把内容复制成一篇新的文集文章">${ui.icon('download', 13)}<span>复制一份</span></button>
       </div>` : ''}
 
       <div class="md-toolbar">
@@ -607,6 +689,23 @@ async function renderEditor(el, ctx, id, ext) {
   $('#extReveal') && ($('#extReveal').onclick = async () => {
     const ok = await revealInManager(ext.path);
     if (!ok) ui.toast('无法打开文件管理器', '请在飞牛桌面中操作', 'warn', 5000);
+  });
+  $('#extLink') && ($('#extLink').onclick = async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    if (dirty) {
+      const ok = await save();
+      if (!ok) { btn.disabled = false; return; }
+    }
+    try {
+      await api.externalLink(ext.path, titleEl.value.trim());
+      const label = btn.querySelector('span');
+      if (label) label.textContent = '已在文章库';
+      ui.toast('已加入文章库', '条目只记录路径，不复制内容、不占额外空间', 'ok', 4500);
+    } catch (err) {
+      btn.disabled = false;
+      ui.toast('加入失败', err.message, 'err', 6000);
+    }
   });
   $('#extToLib') && ($('#extToLib').onclick = async (e) => {
     const btn = e.currentTarget;

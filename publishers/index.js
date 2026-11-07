@@ -16,5 +16,12 @@ window.waterfishPublishers = [
     "desc": "发布到 NotionNext 等基于 Notion 数据库的博客系统（标题 / 标签 / 状态 / 正文）",
     "file": "notionnext.js",
     "version": "1.0.0"
+  },
+  {
+    "id": "wordpress",
+    "name": "WordPress",
+    "desc": "通过 WordPress REST API 发布文章（标题 / 标签 / 正文 / 摘要），可存草稿或直接发布",
+    "file": "wordpress.js",
+    "version": "1.0.0"
   }
 ];

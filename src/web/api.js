@@ -46,6 +46,10 @@ export const api = {
   seoDelete: (id) => req(`api/seo/${enc(id)}`, { method: 'DELETE' }),
 
   settings: () => req('api/settings'),
+
+  // 管理员：GitHub 加速源（系统级，全用户生效）
+  githubProxy: () => req('api/settings/github'),
+  saveGithubProxy: (body) => req('api/settings/github', { method: 'PUT', body: JSON.stringify(body) }),
   saveSettings: (body) => req('api/settings', { method: 'PUT', body: JSON.stringify(body) }),
   setStorage: (path) => req('api/settings/storage', { method: 'POST', body: JSON.stringify({ path }) }),
   browse: (path) => req('api/browse' + (path ? `?path=${enc(path)}` : '')),
@@ -73,4 +77,10 @@ export const api = {
   externalScan: (path) => req('api/external/scan', { method: 'POST', body: JSON.stringify({ path }) }),
   externalRoots: () => req('api/external/roots'),
   externalImport: (paths) => req('api/external/import', { method: 'POST', body: JSON.stringify({ paths }) }),
+  externalFormats: () => req('api/external/formats'),
+  // 浏览器原生预览地址（PDF 用内置阅读器渲染）
+  externalRawURL: (path) => `api/external/raw?path=${enc(path)}`,
+  // 加入文章库（不复制内容，正文始终读写原文件）
+  externalLink: (path, title) => req('api/external/link', { method: 'POST', body: JSON.stringify({ path, title }) }),
+  externalUnlink: (id) => req('api/external/unlink', { method: 'POST', body: JSON.stringify({ id }) }),
 };

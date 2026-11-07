@@ -160,6 +160,44 @@ export async function render(el, ctx) {
           <button class="btn btn-ghost" id="reload">${ui.icon('refresh')}<span>刷新页面数据</span></button>
         </div>
       </div>
+
+      <div class="card card-pad section">
+        <div class="section-title">GitHub 加速源</div>
+        <p class="section-desc">「检查更新」与「下载发布适配器」需要访问 GitHub。默认直连；国内网络不通时可在此开启加速线路，仅对应用的这两类请求生效。</p>
+
+        <div class="field">
+          <label>启用加速</label>
+          <label class="switch" title="开启 / 关闭 GitHub 加速">
+            <input type="checkbox" id="ghProxyToggle">
+            <span class="switch-track"></span>
+          </label>
+        </div>
+
+        <div id="ghProxyBody" hidden>
+          <div class="field">
+            <label>加速线路</label>
+            <div class="pub-picker" id="ghPresets"></div>
+            <span class="hint">线路地址来自预设或你自己添加的条目；格式为「前缀 + 原始地址」。</span>
+          </div>
+
+          <div class="field">
+            <label for="ghCustom">添加自定义线路</label>
+            <div style="display:flex;gap:8px">
+              <input class="input" id="ghCustom" placeholder="https://你的加速域名/" spellcheck="false" autocomplete="off">
+              <button class="btn btn-ghost" id="ghAdd" style="flex:none">${ui.icon('plus', 14)}<span>添加</span></button>
+            </div>
+            <span class="hint">只接受 http(s) 前缀型代理，最多 8 条。</span>
+          </div>
+
+          <div id="ghCustomList" class="gh-list"></div>
+        </div>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
+          <button class="btn btn-primary" id="saveGhProxy">${ui.icon('save')}<span>保存加速设置</span></button>
+          <button class="btn btn-ghost" id="testGhProxy">${ui.icon('refresh')}<span>测试线路</span></button>
+          <span class="hint" id="ghStatus"></span>
+        </div>
+      </div>
     </div>` : ''}
 
     <!-- 更新与实验 -->
@@ -463,6 +501,128 @@ export async function render(el, ctx) {
     });
   };
   if (expPublish) paintPublishers();
+
+  /* ---------- 管理员：GitHub 加速源 ---------- */
+  const ghToggle = $('#ghProxyToggle');
+  const ghBody = $('#ghProxyBody');
+  if (ghToggle && ghBody) {
+    const presetsEl = $('#ghPresets');
+    const customEl = $('#ghCustomList');
+    const statusEl = $('#ghStatus');
+    let gh = { enabled: false, active: '', custom: [], presets: [] };
+
+    const paintPresets = () => {
+      const opts = [
+        ...(gh.presets || []).map((p) => ({ url: p.url, name: p.name, desc: p.desc || '' })),
+        ...(gh.custom || []).filter((u) => !(gh.presets || []).some((p) => p.url === u))
+          .map((u) => ({ url: u, name: u.replace(/^https?:\/\//, '').replace(/\/$/, ''), desc: '自定义' })),
+      ];
+      presetsEl.innerHTML = opts.length
+        ? opts.map((o) => `
+          <label class="gh-opt ${gh.active === o.url ? 'is-active' : ''}" data-url="${ui.esc(o.url)}">
+            <input type="radio" name="ghPreset" value="${ui.esc(o.url)}" ${gh.active === o.url ? 'checked' : ''}>
+            <span class="gh-opt-name">${ui.esc(o.name)}</span>
+            <span class="gh-opt-desc">${ui.esc(o.desc)}</span>
+          </label>`).join('')
+        : '<p class="hint">暂无可用线路，可添加自定义地址</p>';
+      presetsEl.querySelectorAll('.gh-opt').forEach((n) => {
+        n.onclick = () => { gh.active = n.dataset.url; paintPresets(); };
+      });
+    };
+
+    const paintCustom = () => {
+      customEl.innerHTML = (gh.custom || []).length
+        ? gh.custom.map((u) => `
+          <div class="gh-row">
+            <span class="gh-url">${ui.esc(u)}</span>
+            <button class="icon-btn danger" data-del="${ui.esc(u)}" title="删除">${ui.icon('trash', 15)}</button>
+          </div>`).join('')
+        : '<p class="hint" style="margin:0">还没有添加自定义线路</p>';
+      customEl.querySelectorAll('[data-del]').forEach((n) => {
+        n.onclick = () => {
+          gh.custom = gh.custom.filter((x) => x !== n.dataset.del);
+          if (gh.active === n.dataset.del) gh.active = '';
+          paintCustom();
+          paintPresets();
+        };
+      });
+    };
+
+    const paintAll = () => {
+      ghToggle.checked = !!gh.enabled;
+      ghBody.hidden = !gh.enabled;
+      paintPresets();
+      paintCustom();
+    };
+
+    try {
+      const r = await api.githubProxy();
+      gh = { enabled: !!r.enabled, active: r.active || '', custom: r.custom || [], presets: r.presets || [] };
+      paintAll();
+    } catch (e) {
+      statusEl.textContent = '加载失败：' + e.message;
+    }
+
+    ghToggle.onchange = () => {
+      gh.enabled = ghToggle.checked;
+      ghBody.hidden = !gh.enabled;
+      if (gh.enabled && !gh.active) {
+        gh.active = (gh.presets[0] && gh.presets[0].url) || '';
+        paintPresets();
+      }
+    };
+
+    $('#ghAdd').onclick = () => {
+      const input = $('#ghCustom');
+      let v = input.value.trim();
+      if (!v) return;
+      if (!/^https?:\/\//i.test(v)) {
+        ui.toast('地址格式不对', '需以 http:// 或 https:// 开头', 'warn', 4500);
+        return;
+      }
+      if (!v.endsWith('/')) v += '/';
+      if (gh.custom.includes(v)) { ui.toast('已存在该线路', '', 'info'); return; }
+      if (gh.custom.length >= 8) { ui.toast('最多 8 条自定义线路', '', 'warn'); return; }
+      gh.custom.push(v);
+      gh.active = v;
+      input.value = '';
+      paintCustom();
+      paintPresets();
+    };
+
+    $('#saveGhProxy').onclick = async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const r = await api.saveGithubProxy({ enabled: gh.enabled, active: gh.active, custom: gh.custom });
+        gh.enabled = !!r.enabled;
+        gh.active = r.active || '';
+        gh.custom = r.custom || [];
+        paintAll();
+        statusEl.textContent = gh.enabled ? '已保存，加速已开启' : '已保存，当前为直连';
+        ui.toast('已保存', gh.enabled ? 'GitHub 访问将走加速线路' : '已恢复直连', 'ok');
+      } catch (err) {
+        ui.toast('保存失败', err.message, 'err', 6000);
+      } finally {
+        btn.disabled = false;
+      }
+    };
+
+    $('#testGhProxy').onclick = async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      statusEl.textContent = '正在测试…';
+      try {
+        const r = await api.checkUpdate();
+        if (r.error) statusEl.textContent = '测试失败：' + r.error;
+        else statusEl.textContent = `连通正常 · 仓库最新 v${r.latest}`;
+      } catch (err) {
+        statusEl.textContent = '测试失败：' + err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    };
+  }
 
   /* ---------- 图床 ---------- */
   $('#cloudOn') && ($('#cloudOn').onchange = (e) => { $('#cloudStateText').textContent = e.target.checked ? '已启用' : '未启用'; });
