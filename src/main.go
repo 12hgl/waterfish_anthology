@@ -22,6 +22,17 @@ import (
 //go:embed web
 var webFS embed.FS
 
+// listenAddr TCP 监听地址。
+//
+// 桌面入口走统一网关（Unix socket + 网关注入的用户身份头），TCP 端口只服务于
+// 本机排障与健康检查，因此默认只绑定回环地址：直连请求没有 NAS 登录态，
+// 若对外监听，局域网内任何人都能以本地管理员身份操作数据。
+// 确有需要时（如内网自用调试）可在 cmd/main 中显式 export WF_LISTEN=0.0.0.0。
+func listenAddr(port string) string {
+	host := env("WF_LISTEN", "127.0.0.1")
+	return net.JoinHostPort(host, port)
+}
+
 func main() {
 	app := NewApp()
 
@@ -30,13 +41,13 @@ func main() {
 	handler := app.Middleware(mux)
 
 	srv := &http.Server{
-		Addr:              ":" + app.Port,
+		Addr:              listenAddr(app.Port),
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 	go func() {
-		log.Printf("水鱼文集 %s 已启动，监听 :%s", app.Version, app.Port)
+		log.Printf("水鱼文集 %s 已启动，监听 %s", app.Version, listenAddr(app.Port))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("服务启动失败: %v", err)
 		}
@@ -115,6 +126,9 @@ func (a *App) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/update-check", a.handleUpdateCheck)
 	mux.HandleFunc("/api/publishers", a.handlePublishers)
 	mux.HandleFunc("/api/publishers/", a.handlePublisherItem)
+
+	// 外部 Markdown 文件：文件关联打开、编辑保存、导入文章
+	mux.HandleFunc("/api/external/", a.handleExternal)
 }
 
 func (a *App) handleIndex(sub fs.FS) http.HandlerFunc {

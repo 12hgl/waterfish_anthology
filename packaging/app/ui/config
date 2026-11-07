@@ -12,6 +12,21 @@
             "control": {
                 "accessPerm": "readonly"
             }
+        },
+        "waterfish_anthology.edit": {
+            "title": "水鱼文集（编辑 Markdown）",
+            "icon": "images/icon_{0}.png",
+            "type": "iframe",
+            "protocol": "",
+            "gatewayPrefix": "/app/waterfish_anthology",
+            "gatewaySocket": "app.sock",
+            "url": "/app/waterfish_anthology",
+            "allUsers": true,
+            "fileTypes": ["md", "markdown", "mdown", "mdx", "txt"],
+            "noDisplay": true,
+            "control": {
+                "accessPerm": "readonly"
+            }
         }
     }
 }

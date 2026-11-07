@@ -1,12 +1,12 @@
 appname               = waterfish_anthology
-version               = 1.0.1
+version               = 1.1.0
 display_name           = 水鱼文集
-desc                  = 面向写作与内容整理的 Markdown 文集：文章库、图片库（本地 / Cloudinary 图床）、SEO 检测与自定义存储路径。接入飞牛统一网关，NAS 账号免登打开，各账号数据独立。
+desc                  = 面向写作与内容整理的 Markdown 文集：文章库、图片库（本地 / Cloudinary 图床）、SEO 检测与自定义存储路径，并可直接打开磁盘上的 .md 文件编辑保存、从任意文件夹导入文章（需授权目录）。接入飞牛统一网关，NAS 账号免登打开，各账号数据独立。
 source                = thirdparty
 platform              = x86
 
 maintainer            = waterfish
-maintainer_url        = https://fnnas.com
+maintainer_url        = https://github.com/12hgl/waterfish_anthology
 
 os_min_version        = 1.0.0
 
@@ -17,4 +17,6 @@ service_port          = 8631
 checkport             = true
 ctl_stop              = true
 
-changelog             = 1.0.1 新增：① 版本更新检测——设置页「更新与实验」可一键检查新版本，读取仓库 latest 分支的版本信息（直连失败自动走 gh-proxy 加速），展示更新内容与安装包下载地址；② 文章发布（Beta，实验性功能默认关闭，需在设置中开启）——文章编辑页新增「发布」按钮，支持复制发布（文章与本地图片按序写入剪贴板，粘贴到 Notion 等编辑器）与适配器发布（下载 NotionNext 等适配器、配置密钥后直接发布到建站系统，本地图片自动转为图床公网链接）；适配器代码托管在项目仓库、不内置在应用内，可独立更新。
+micro_app             = true
+
+changelog             = 1.1.0 新增：① Markdown 文件关联——在文件管理器中双击或右键「打开方式」选择水鱼文集，即可直接编辑并保存磁盘上的 .md 文件（写回原文件，保留原有的 tags、date 等元信息；首次打开会请求授权所在文件夹，可在应用设置随时移除）；② 导入文章——文章库新增「导入」，从任意文件夹批量导入 .md 为文集文章（原文件不受影响）；③ 路径按系统语义化显示。授权能力依赖飞牛系统 1.2.0401 及以上，更低版本仍可手动在「应用中心 → 水鱼文集 → 设置 → 授权目录」添加目录后使用。

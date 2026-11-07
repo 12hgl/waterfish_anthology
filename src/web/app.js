@@ -158,11 +158,30 @@ const ctx = {
 
   navigate(view, params = {}) {
     const hash = '#' + view + (params && params.id ? '/' + encodeURIComponent(params.id) : '');
+    // 离开外部文件视图时清掉入口带来的 ?path=，避免刷新又跳回该文件
+    if (location.search) history.replaceState(null, '', location.pathname + location.hash);
     if (location.hash === hash) route();
     else location.hash = hash;
   },
 
   refresh() { route(); },
+
+  // 打开系统「打开方式」传进来的外部文件（文件关联入口带 ?path=）
+  openExternal(path) {
+    const host = document.getElementById('view');
+    ctx.leaveGuard = null;
+    ctx.hasUnsaved = () => false;
+    ctx.extPath = path;
+    host.scrollTop = 0;
+    document.getElementById('content').scrollTop = 0;
+    document.querySelectorAll('.nav-item').forEach((n) => {
+      n.classList.toggle('is-active', n.dataset.view === 'articles');
+    });
+    document.title = '编辑文件 · 水鱼文集';
+    return articles.renderExternalFile(host, ctx, path).catch((e) => {
+      host.innerHTML = `<div class="empty">${ui.icon('alert', 56)}<h3>无法打开文件</h3><p>${ui.esc(e.message)}</p></div>`;
+    });
+  },
 
   // 保存外观配置（分段保存，立即应用）
   async saveAppearance(patch) {
@@ -294,6 +313,13 @@ async function boot() {
   });
 
   window.addEventListener('hashchange', onHashChange);
+
+  // 文件关联入口：飞牛在 URL 后追加 ?path=<绝对路径>
+  const extPath = new URLSearchParams(location.search).get('path');
+  if (extPath) {
+    await ctx.openExternal(extPath);
+    return;
+  }
   await route();
 }
 

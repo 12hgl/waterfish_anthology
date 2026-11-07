@@ -5,6 +5,7 @@ import * as ui from '../ui.js';
 import { renderMarkdown, buildCopyHTML } from '../markdown.js';
 import { createHistory } from '../editor.js';
 import { openPublishDialog, expPublishEnabled } from '../publish.js';
+import { openImportDialog, authorizePath, revealInManager } from '../external.js';
 
 const local = { list: [], keyword: '' };
 
@@ -23,12 +24,14 @@ async function renderList(el, ctx) {
         <div class="page-sub">正在加载…</div>
       </div>
       <div class="spacer"></div>
+      <button class="btn btn-ghost" id="importArticle" title="从磁盘导入 Markdown 文件">${ui.icon('download')}<span>导入</span></button>
       <button class="btn btn-primary" id="newArticle">${ui.icon('plus')}<span>新建文章</span></button>
     </div>
     <div class="article-grid" id="grid">${'<div class="skeleton" style="height:168px"></div>'.repeat(6)}</div>
   `;
 
   el.querySelector('#newArticle').onclick = () => ctx.navigate('articles', { id: 'new' });
+  el.querySelector('#importArticle').onclick = () => openImportDialog(() => ctx.refresh());
 
   let list = [];
   try {
@@ -146,14 +149,89 @@ async function doCopy(id, ctx) {
 
 /* ==================== 编辑器 ==================== */
 
-async function renderEditor(el, ctx, id) {
+/* ==================== 外部文件（文件管理器「打开方式」） ==================== */
+
+// renderExternalFile 打开系统传来的 .md 文件：先取内容，未授权则引导授权后再进编辑器。
+export async function renderExternalFile(el, ctx, path) {
+  el.innerHTML = `
+    <div class="empty">
+      ${ui.icon('file', 56)}
+      <h3>正在打开文件…</h3>
+      <p>${ui.esc(path)}</p>
+    </div>`;
+  let file;
+  try {
+    file = await api.externalOpen(path);
+  } catch (e) {
+    const needGrant = !!(e.status === 403 && e.data && e.data.needGrant);
+    renderGrantGate(el, ctx, path, needGrant, e.message);
+    return;
+  }
+  return renderEditor(el, ctx, 'external', { path: file.path, file });
+}
+
+// renderGrantGate 授权引导：系统只把用户明确同意的路径授予应用。
+function renderGrantGate(el, ctx, path, needGrant, message) {
+  const dir = path.replace(/\/[^/]+\/?$/, '') || '/';
+  el.innerHTML = `
+    <div class="ext-gate">
+      <div class="ext-gate-ico">${ui.icon('shield', 40)}</div>
+      <h2>${needGrant ? '需要授权访问' : '无法打开该文件'}</h2>
+      <p class="ext-gate-desc">${needGrant
+        ? '水鱼文集以独立的应用用户运行，读取和写回磁盘文件前需要你确认授权。系统会弹出选择窗口，授权范围是该文件所在的文件夹。'
+        : '文件可能已被移动、删除，或不是受支持的文本格式。'}</p>
+      <div class="ext-gate-path" title="${ui.esc(path)}">${ui.esc(path)}</div>
+      ${message && message !== '需要授权访问该文件所在位置' ? `<p class="ext-gate-err">${ui.esc(message)}</p>` : ''}
+      <div class="ext-gate-actions">
+        ${needGrant ? `<button class="btn btn-primary" id="extGrant">${ui.icon('shield', 15)}<span>授权访问</span></button>` : ''}
+        <button class="btn btn-ghost" id="extBack">返回文章库</button>
+      </div>
+      ${needGrant ? `<ul class="ext-gate-tips">
+        <li>授权只授予「${ui.esc(dir)}」，不会扩大到你其他目录；</li>
+        <li>可随时在「应用中心 → 水鱼文集 → 设置 → 授权目录」中移除；</li>
+        <li>编辑保存后直接写回原文件，不会另存副本。</li>
+      </ul>` : ''}
+    </div>`;
+
+  const grantBtn = el.querySelector('#extGrant');
+  grantBtn && (grantBtn.onclick = async () => {
+    grantBtn.disabled = true;
+    grantBtn.innerHTML = `<span class="spinner"></span><span>等待系统确认…</span>`;
+    const r = await authorizePath(dir, { directory: true });
+    if (r.ok) {
+      ui.toast('已授权', '正在打开文件…', 'ok', 3000);
+      ctx.openExternal(path);
+      return;
+    }
+    grantBtn.disabled = false;
+    grantBtn.innerHTML = `${ui.icon('shield', 15)}<span>重试授权</span>`;
+    const errEl = el.querySelector('.ext-gate-err');
+    if (errEl) errEl.textContent = r.reason || '授权未完成';
+    else {
+      const p = document.createElement('p');
+      p.className = 'ext-gate-err';
+      p.textContent = r.reason || '授权未完成';
+      el.querySelector('.ext-gate-actions').before(p);
+    }
+  });
+  el.querySelector('#extBack').onclick = () => ctx.navigate('articles');
+}
+
+async function renderEditor(el, ctx, id, ext) {
+  const isExt = !!(ext && ext.path);
   const isNew = id === 'new';
   let art = { id: '', title: '', content: '', created: '', updated: '' };
   let dirty = false;
   let autoSave = false;  // 每篇文章独立的自动保存开关（持久化在文章旁的 .wf.json）
   let persistedHistory = []; // 从侧车文件读到的修改记录
 
-  if (!isNew) {
+  if (isExt) {
+    // 外部文件：正文与标题来自磁盘，保存写回原文件；不建立侧车、不改文件名
+    art = {
+      id: '', title: ext.file.title, content: ext.file.content,
+      created: ext.file.modTime, updated: ext.file.modTime,
+    };
+  } else if (!isNew) {
     try {
       art = await api.article(id);
     } catch (e) {
@@ -172,14 +250,24 @@ async function renderEditor(el, ctx, id) {
       <div class="editor-head">
         <button class="btn btn-quiet" id="back" title="返回列表">${ui.icon('chevronLeft')}<span>返回</span></button>
         <input class="editor-title" id="title" placeholder="文章标题…" value="${ui.esc(art.title)}">
-        <span class="editor-status" id="status">${isNew ? '尚未保存' : `更新于 ${ui.fmtDate(art.updated)}`}</span>
+        <span class="editor-status" id="status">${isExt
+          ? `外部文件 · ${ui.fmtSize(ext.file.size)}`
+          : (isNew ? '尚未保存' : `更新于 ${ui.fmtDate(art.updated)}`)}</span>
         <button class="btn btn-ghost btn-sm" id="autoSaveBtn" title="自动保存">${ui.icon('check', 13)}<span id="autoSaveLabel">自动保存</span></button>
-        <button class="btn btn-ghost btn-sm" id="copyBtn" title="复制文章（兼容 Notion 粘贴）">${ui.icon('copy', 14)}<span>复制</span></button>
-        ${expPublishEnabled() ? `<button class="btn btn-ghost btn-sm" id="publishBtn" title="发布文章">${ui.icon('rocket', 14)}<span>发布</span></button>` : ''}
+        ${isExt ? '' : `<button class="btn btn-ghost btn-sm" id="copyBtn" title="复制文章（兼容 Notion 粘贴）">${ui.icon('copy', 14)}<span>复制</span></button>`}
+        ${!isExt && expPublishEnabled() ? `<button class="btn btn-ghost btn-sm" id="publishBtn" title="发布文章">${ui.icon('rocket', 14)}<span>发布</span></button>` : ''}
         <button class="btn btn-ghost btn-sm" id="viewBtn" title="切换编辑 / 分栏 / 预览">${ui.icon('columns', 14)}<span id="viewLabel">分栏</span></button>
-        ${isNew ? '' : `<button class="btn btn-danger btn-sm" id="delBtn">${ui.icon('trash', 14)}<span>删除</span></button>`}
+        ${isNew || isExt ? '' : `<button class="btn btn-danger btn-sm" id="delBtn">${ui.icon('trash', 14)}<span>删除</span></button>`}
         <button class="btn btn-primary btn-sm" id="saveBtn">${ui.icon('save', 14)}<span>保存</span></button>
       </div>
+      ${isExt ? `
+      <div class="ext-bar">
+        ${ui.icon('file', 15)}
+        <span class="ext-path" title="${ui.esc(ext.file.displayPath || ext.path)}">${ui.esc(ext.file.displayPath || ext.path)}</span>
+        ${ext.file.writable ? '' : `<span class="ext-warn">${ui.icon('alert', 13)}只读：应用对该文件没有写入权限</span>`}
+        <button class="btn btn-quiet btn-xs" id="extReveal" title="在文件管理器中显示">${ui.icon('folder', 13)}<span>定位</span></button>
+        <button class="btn btn-quiet btn-xs" id="extToLib" title="复制一份到文章库后编辑">${ui.icon('download', 13)}<span>导入到文章库</span></button>
+      </div>` : ''}
 
       <div class="md-toolbar">
         <button class="md-btn" data-md="undo" id="undoBtn" title="撤销 (Ctrl+Z)">${ui.icon('undo')}</button>
@@ -265,7 +353,7 @@ async function renderEditor(el, ctx, id) {
   paintAutoSave();
 
   const persistEditor = () => {
-    if (!art.id) return; // 新文章首次保存后再建立侧车文件
+    if (isExt || !art.id) return; // 外部文件不写侧车；新文章首次保存后再建立侧车文件
     const entries = hist.entries();
     const top = entries.length ? entries[entries.length - 1].content : '';
     if (top === lastPersisted) return;
@@ -467,22 +555,32 @@ async function renderEditor(el, ctx, id) {
     statusEl.textContent = auto ? '正在自动保存…' : '正在保存…';
     statusEl.style.color = 'var(--ink-3)';
     try {
-      const saved = isNew
-        ? await api.createArticle({ title, content })
-        : await api.updateArticle(prevID, { title, content });
-      art = saved;
+      let saved;
+      if (isExt) {
+        saved = await api.externalSave(ext.path, title, content);
+        art.title = saved.title;
+        art.content = saved.content;
+        art.updated = saved.modTime;
+      } else {
+        saved = isNew
+          ? await api.createArticle({ title, content })
+          : await api.updateArticle(prevID, { title, content });
+        art = saved;
+      }
       dirty = false;
-      statusEl.textContent = auto ? `已自动保存 · ${nowTime()}` : `已保存 · ${ui.fmtDate(saved.updated)}`;
+      statusEl.textContent = auto
+        ? `已自动保存 · ${nowTime()}`
+        : (isExt ? `已写回原文件 · ${nowTime()}` : `已保存 · ${ui.fmtDate(saved.updated)}`);
       statusEl.style.color = 'var(--ok)';
       // 新建或标题变化导致文件名变更时，先落盘侧车状态再同步地址重挂编辑器
-      if (isNew || saved.id !== prevID) {
+      if (!isExt && (isNew || saved.id !== prevID)) {
         await flushEditorState();
         const hash = '#articles/' + encodeURIComponent(saved.id);
         if (location.hash === hash) ctx.route();
         else location.hash = hash;
       }
       ctx.refreshState();
-      if (!auto) ui.toast('已保存', saved.title, 'ok', 2000);
+      if (!auto) ui.toast(isExt ? '已写回原文件' : '已保存', isExt ? saved.name : saved.title, 'ok', 2000);
       return true;
     } catch (e) {
       statusEl.textContent = auto ? '自动保存失败' : '保存失败';
@@ -497,13 +595,41 @@ async function renderEditor(el, ctx, id) {
   };
 
   $('#saveBtn').onclick = () => save();
-  $('#copyBtn').onclick = async () => {
+  $('#copyBtn') && ($('#copyBtn').onclick = async () => {
     if (isNew || dirty) {
       const ok = await save();
       if (!ok) return;
     }
     await doCopy(art.id, ctx);
-  };
+  });
+
+  // 外部文件：在文件管理器中定位 / 复制一份到文章库（不打断当前编辑）
+  $('#extReveal') && ($('#extReveal').onclick = async () => {
+    const ok = await revealInManager(ext.path);
+    if (!ok) ui.toast('无法打开文件管理器', '请在飞牛桌面中操作', 'warn', 5000);
+  });
+  $('#extToLib') && ($('#extToLib').onclick = async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      if (dirty) {
+        const ok = await save();
+        if (!ok) { btn.disabled = false; return; }
+      }
+      const r = await api.externalImport([ext.path]);
+      const one = (r.imported || [])[0];
+      if (one) {
+        ui.toast('已导入到文章库', one.title, 'ok', 4000);
+        ctx.navigate('articles', { id: one.id });
+      } else {
+        ui.toast('导入失败', (r.skipped || []).join('、') || '', 'err', 6000);
+      }
+    } catch (err) {
+      ui.toast('导入失败', err.message, 'err', 6000);
+    } finally {
+      btn.disabled = false;
+    }
+  });
   $('#publishBtn') && ($('#publishBtn').onclick = async () => {
     if (isNew || dirty) {
       const ok = await save();

@@ -9,7 +9,10 @@ async function req(path, opts = {}) {
   try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
   if (!res.ok) {
     const msg = (data && (data.error || data.message)) || `请求失败 (${res.status})`;
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = res.status;
+    err.data = data;
+    throw err;
   }
   return data;
 }
@@ -59,4 +62,15 @@ export const api = {
     method: 'PUT', body: JSON.stringify({ config }),
   }),
   removePublisher: (id) => req(`api/publishers/${enc(id)}`, { method: 'DELETE' }),
+
+  // 外部 Markdown 文件（文件管理器「打开方式」与导入文章）
+  externalCaps: () => req('api/external/caps'),
+  externalOpen: (path) => req('api/external/open', { method: 'POST', body: JSON.stringify({ path }) }),
+  externalSave: (path, title, content) => req('api/external/save', {
+    method: 'PUT', body: JSON.stringify({ path, title, content }),
+  }),
+  externalGrant: (path) => req('api/external/grant', { method: 'POST', body: JSON.stringify({ path }) }),
+  externalScan: (path) => req('api/external/scan', { method: 'POST', body: JSON.stringify({ path }) }),
+  externalRoots: () => req('api/external/roots'),
+  externalImport: (paths) => req('api/external/import', { method: 'POST', body: JSON.stringify({ paths }) }),
 };
