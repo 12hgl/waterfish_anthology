@@ -227,7 +227,13 @@ func (u *UserApp) listArticles() ([]ArticleMeta, error) {
 		out = append(out, art.ArticleMeta)
 	}
 	// 合并「外链文章」：只读磁盘上的原文件，不复制内容
-	for _, ln := range u.linkedList() {
+	links := u.linkedList()
+	linkPaths := make([]string, 0, len(links))
+	for _, ln := range links {
+		linkPaths = append(linkPaths, ln.Path)
+	}
+	linkReadable := u.readableSet(linkPaths)
+	for _, ln := range links {
 		meta := ArticleMeta{
 			ID: ln.ID, Title: ln.Title, Created: ln.Created, Updated: ln.Created,
 			External: true, Path: ln.Path,
@@ -235,7 +241,10 @@ func (u *UserApp) listArticles() ([]ArticleMeta, error) {
 		if f, ok := formatOf(ln.Path); ok {
 			meta.Format = f.Label
 		}
-		if st, err := os.Stat(ln.Path); err == nil && !st.IsDir() {
+		// 文件列表也按当前用户过滤：无读取权限时只标记失效，不泄露大小与时间
+		if !linkReadable[filepath.Clean(ln.Path)] {
+			meta.Missing = true
+		} else if st, err := os.Stat(ln.Path); err == nil && !st.IsDir() {
 			meta.Size = st.Size()
 			meta.Updated = st.ModTime().Format(time.RFC3339)
 			if meta.Created == "" {

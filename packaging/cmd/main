@@ -20,7 +20,14 @@ user_error() {
 
 check_process() {
     local pid="${1:-}"
-    [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null
+    [ -n "${pid}" ] || return 1
+    kill -0 "${pid}" 2>/dev/null || return 1
+
+    # PID 可能被系统复用。只有进程首参数仍是本应用二进制，才认定为水鱼文集进程。
+    [ -r "/proc/${pid}/cmdline" ] || return 1
+    local cmd
+    cmd="$(exec 2>/dev/null; tr '\0' '\n' < "/proc/${pid}/cmdline" | head -n 1)"
+    [ "${cmd}" = "${APP_BIN}" ]
 }
 
 running() {
@@ -53,7 +60,12 @@ start_process() {
     log_msg "starting ${APP_BIN} (port=${TRIM_SERVICE_PORT:-8631})"
     "${APP_BIN}" >> "${LOG_FILE}" 2>&1 &
     local pid=$!
-    printf '%s' "${pid}" > "${PID_FILE}"
+    if ! printf '%s' "${pid}" > "${PID_FILE}"; then
+        kill -TERM "${pid}" 2>/dev/null
+        user_error "无法写入 PID 文件：${PID_FILE}"
+        log_msg "cannot write pid file: ${PID_FILE}"
+        return 1
+    fi
 
     local count=0
     while [ ${count} -lt 8 ]; do
@@ -99,6 +111,12 @@ stop_process() {
         sleep 1
     fi
 
+    if check_process "${pid}"; then
+        user_error "水鱼文集停止失败，请稍后重试或查看 ${LOG_FILE}"
+        log_msg "failed to stop pid=${pid}"
+        return 1
+    fi
+
     rm -f "${PID_FILE}" 2>/dev/null
     log_msg "stopped"
     return 0
@@ -114,7 +132,9 @@ case "${1:-}" in
         exit $?
         ;;
     restart)
-        stop_process
+        if ! stop_process; then
+            exit 1
+        fi
         start_process
         exit $?
         ;;

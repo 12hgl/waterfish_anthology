@@ -40,6 +40,8 @@ var (
 	errNeedGrant = errors.New("需要授权访问该文件所在位置")
 	// errNotText 不是受支持的文件格式。
 	errNotText = errors.New("不支持该文件格式")
+	// errNoPermission 当前 NAS 用户没有该路径的读取权限。
+	errNoPermission = errors.New("当前用户没有该路径的读取权限")
 )
 
 // allowedExternal 判断扩展名是否受支持（见 convert.go 的 formatTable）。
@@ -145,28 +147,54 @@ func (u *UserApp) withinExternal(path string) bool {
 
 // uidOf 当前登录用户的数字 uid（网关头 X-Trim-Userid）。
 func (u *UserApp) uidOf() int {
-	if u.user == nil {
-		return 0
-	}
-	n, _ := strconv.Atoi(strings.TrimSpace(u.user.ID))
+	n, _ := strconv.Atoi(strings.TrimSpace(u.User().ID))
 	return n
 }
 
-// aclOf 复核当前用户对路径的权限：优先问系统，接口不可用时退回本地探测。
+// aclOf 复核当前用户对路径的权限。
+// 网关用户必须通过 trim.file.checkUserACL 核验；开放接口异常时 fail closed，
+// 不能把「应用运行用户能访问」误判成「当前 NAS 用户能访问」。
+// 本地开发 / 本机排障没有网关头，才退回操作系统权限探测。
 func (u *UserApp) aclOf(path string) aclEntry {
 	entry := aclEntry{Path: path}
 	if list, err := checkUserACL(appName, u.uidOf(), []string{path}); err == nil && len(list) > 0 {
 		return list[0]
 	}
-	// 降级：应用能读到即视为可读；能打开写入句柄即可写（不截断内容）
+	if u.User().Source == "gateway" {
+		return entry
+	}
 	if _, err := os.Stat(path); err == nil {
 		entry.Readable = true
 		if f, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
 			entry.Writable = true
-			f.Close()
+			_ = f.Close()
 		}
 	}
 	return entry
+}
+
+// readableSet 批量复核当前用户对一组路径的读权限，供目录扫描和批量导入使用。
+// 网关场景只调用一次系统接口，避免逐文件请求放大延迟。
+func (u *UserApp) readableSet(paths []string) map[string]bool {
+	out := make(map[string]bool, len(paths))
+	if len(paths) == 0 {
+		return out
+	}
+	if list, err := checkUserACL(appName, u.uidOf(), paths); err == nil {
+		for _, item := range list {
+			out[filepath.Clean(item.Path)] = item.Readable
+		}
+		return out
+	}
+	if u.User().Source == "gateway" {
+		return out
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			out[filepath.Clean(path)] = true
+		}
+	}
+	return out
 }
 
 // ExternalFile 外部文件内容与元信息。
@@ -197,15 +225,32 @@ type ExternalFile struct {
 }
 
 // semanticPath 把内部路径转成用户能理解的展示路径。
-func semanticPath(path string) string {
+// language 来自当前请求的界面语言，不能硬编码。
+func semanticPath(path, language string) string {
 	if !trimAPIAvailable() {
 		return ""
 	}
-	m, err := convertPaths(appName, []string{path}, "zh-CN")
+	m, err := convertPaths(appName, []string{path}, language)
 	if err != nil {
 		return ""
 	}
 	return m[path]
+}
+
+// requestLanguage 取当前界面语言：前端显式传 X-App-Language，
+// 缺失时退回浏览器 Accept-Language 的首选语言。
+func requestLanguage(r *http.Request) string {
+	if v := strings.TrimSpace(r.Header.Get("X-App-Language")); v != "" {
+		return v
+	}
+	v := strings.TrimSpace(r.Header.Get("Accept-Language"))
+	if i := strings.IndexAny(v, ",;"); i >= 0 {
+		v = strings.TrimSpace(v[:i])
+	}
+	if v == "" {
+		return "zh-CN"
+	}
+	return v
 }
 
 // ---------- frontmatter 处理 ----------
@@ -292,6 +337,12 @@ func (u *UserApp) openExternal(raw string) (ExternalFile, error) {
 		return ExternalFile{}, fmt.Errorf("文件超过 %d MB，暂不支持打开", limit>>20)
 	}
 
+	// 官方要求：返回预览或正文前，先按当前用户 uid 复核 readable。
+	acl := u.aclOf(abs)
+	if !acl.Readable {
+		return ExternalFile{}, errNoPermission
+	}
+
 	base := ExternalFile{
 		Path:        abs,
 		Name:        filepath.Base(abs),
@@ -300,7 +351,6 @@ func (u *UserApp) openExternal(raw string) (ExternalFile, error) {
 		Mode:        f.Mode,
 		Format:      f.Kind,
 		FormatLabel: f.Label,
-		DisplayPath: semanticPath(abs),
 	}
 
 	// 闭源二进制：说明清楚为什么打不开，并给出可执行的替代做法
@@ -353,7 +403,6 @@ func (u *UserApp) openExternal(raw string) (ExternalFile, error) {
 		}
 	}
 
-	acl := u.aclOf(abs)
 	base.Title = title
 	base.Content = body
 	base.Readable = acl.Readable
@@ -416,7 +465,8 @@ func (u *UserApp) saveExternal(raw, title, content string) (ExternalFile, error)
 	return u.openExternal(abs)
 }
 
-// checkWritable 写前复核权限：系统 ACL 优先，不可用时退回本地探测。
+// checkWritable 写前复核权限：系统 ACL 优先；网关请求在开放接口异常时 fail closed，
+// 本地开发 / 本机排障才退回操作系统权限探测。
 func (u *UserApp) checkWritable(path string) error {
 	if list, err := checkUserACL(appName, u.uidOf(), []string{path}); err == nil && len(list) > 0 {
 		if !list[0].Writable {
@@ -424,11 +474,14 @@ func (u *UserApp) checkWritable(path string) error {
 		}
 		return nil
 	}
+	if u.User().Source == "gateway" {
+		return errors.New("无法确认当前用户对该文件的写入权限，请稍后重试")
+	}
 	f, err := os.OpenFile(path, os.O_WRONLY, 0)
 	if err != nil {
 		return errors.New("应用没有该文件的写入权限，请先授权所在文件夹")
 	}
-	f.Close()
+	_ = f.Close()
 	return nil
 }
 
@@ -487,6 +540,10 @@ func (u *UserApp) writeLinks(items []linkedArticle) error {
 // addLink 把外部文件加入文章库（幂等）。
 func (u *UserApp) addLink(path, title string) (linkedArticle, error) {
 	path = filepath.Clean(path)
+	// 加入文章库意味着后续会读取原文件，先确认当前用户可读。
+	if !u.aclOf(path).Readable {
+		return linkedArticle{}, errNoPermission
+	}
 	id := linkIDFor(path)
 	linksMu.Lock()
 	var items []linkedArticle
@@ -593,6 +650,10 @@ func (u *UserApp) externalRaw(raw string) ([]byte, string, error) {
 	if info.Size() > maxConvertSource {
 		return nil, "", errors.New("文件过大，无法预览")
 	}
+	// 原始字节同样属于文件内容，下发前必须确认当前用户可读。
+	if !u.aclOf(abs).Readable {
+		return nil, "", errNoPermission
+	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		return nil, "", errNeedGrant
@@ -623,8 +684,12 @@ func (u *UserApp) scanExternalDir(raw string) (string, []ExternalFile, error) {
 	if !info.IsDir() {
 		return abs, nil, errors.New("请选择一个文件夹")
 	}
+	if !u.aclOf(abs).Readable {
+		return abs, nil, errNoPermission
+	}
 
-	out := []ExternalFile{}
+	// 先收集候选文件，再一次批量复核当前用户读权限，避免逐文件请求。
+	candidates := []ExternalFile{}
 	var walk func(dir string, depth int)
 	walk = func(dir string, depth int) {
 		entries, err := os.ReadDir(dir)
@@ -645,7 +710,7 @@ func (u *UserApp) scanExternalDir(raw string) (string, []ExternalFile, error) {
 			return names[i].Name() < names[j].Name()
 		})
 		for _, e := range names {
-			if len(out) >= maxScanFiles {
+			if len(candidates) >= maxScanFiles {
 				return
 			}
 			full := filepath.Join(dir, e.Name())
@@ -662,40 +727,52 @@ func (u *UserApp) scanExternalDir(raw string) (string, []ExternalFile, error) {
 			if err != nil || info.Size() > maxExternalSize {
 				continue
 			}
-			item := ExternalFile{
+			candidates = append(candidates, ExternalFile{
 				Path:    full,
 				Name:    e.Name(),
 				Title:   strings.TrimSuffix(e.Name(), filepath.Ext(e.Name())),
 				Size:    info.Size(),
 				ModTime: info.ModTime().Format(time.RFC3339),
-			}
-			// 只读首屏内容取标题，避免整目录读盘
-			if f, err := os.Open(full); err == nil {
-				buf := make([]byte, 4096)
-				n, _ := f.Read(buf)
-				f.Close()
-				head, body, hasMeta := splitFrontMatter(string(buf[:n]))
-				if hasMeta {
-					for _, line := range strings.Split(head, "\n") {
-						if k, v, ok := strings.Cut(line, ":"); ok && strings.EqualFold(strings.TrimSpace(k), "title") {
-							if t := strings.TrimSpace(v); t != "" {
-								item.Title = t
-							}
-						}
-					}
-				} else {
-					for _, line := range strings.Split(body, "\n") {
-						if t, ok := strings.CutPrefix(strings.TrimSpace(line), "# "); ok && strings.TrimSpace(t) != "" {
-							item.Title = strings.TrimSpace(t)
-							break
-						}
-					}
-				}
-			}
-			out = append(out, item)
+			})
 		}
 	}
 	walk(abs, 1)
+
+	paths := make([]string, 0, len(candidates))
+	for _, item := range candidates {
+		paths = append(paths, item.Path)
+	}
+	readable := u.readableSet(paths)
+	out := make([]ExternalFile, 0, len(candidates))
+	for _, item := range candidates {
+		if !readable[filepath.Clean(item.Path)] {
+			continue
+		}
+		// 只读首屏内容取标题，避免整目录读盘
+		if f, err := os.Open(item.Path); err == nil {
+			buf := make([]byte, 4096)
+			n, _ := f.Read(buf)
+			_ = f.Close()
+			head, body, hasMeta := splitFrontMatter(string(buf[:n]))
+			if hasMeta {
+				for _, line := range strings.Split(head, "\n") {
+					if k, v, ok := strings.Cut(line, ":"); ok && strings.EqualFold(strings.TrimSpace(k), "title") {
+						if t := strings.TrimSpace(v); t != "" {
+							item.Title = t
+						}
+					}
+				}
+			} else {
+				for _, line := range strings.Split(body, "\n") {
+					if t, ok := strings.CutPrefix(strings.TrimSpace(line), "# "); ok && strings.TrimSpace(t) != "" {
+						item.Title = strings.TrimSpace(t)
+						break
+					}
+				}
+			}
+		}
+		out = append(out, item)
+	}
 	return abs, out, nil
 }
 
@@ -703,8 +780,16 @@ func (u *UserApp) scanExternalDir(raw string) (string, []ExternalFile, error) {
 func (u *UserApp) importExternal(paths []string) ([]ArticleMeta, []string) {
 	imported := []ArticleMeta{}
 	skipped := []string{}
+
+	type importCandidate struct {
+		raw  string
+		abs  string
+		info os.FileInfo
+		f    fileFormat
+	}
+	candidates := []importCandidate{}
 	for _, raw := range paths {
-		if len(imported) >= 50 {
+		if len(candidates) >= 50 {
 			break
 		}
 		abs, err := resolveExternalPath(raw)
@@ -721,6 +806,25 @@ func (u *UserApp) importExternal(paths []string) ([]ArticleMeta, []string) {
 		if !ok || f.Mode == modeBinary {
 			skipped = append(skipped, filepath.Base(raw)+"（"+f.Label+"暂不支持，请另存为 .docx 或 PDF）")
 			continue
+		}
+		candidates = append(candidates, importCandidate{raw: raw, abs: abs, info: info, f: f})
+	}
+
+	// 导入前批量复核当前用户读权限；不可检查或无权限的一律跳过。
+	aclPaths := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		aclPaths = append(aclPaths, c.abs)
+	}
+	readable := u.readableSet(aclPaths)
+
+	for _, c := range candidates {
+		raw, abs, info, f := c.raw, c.abs, c.info, c.f
+		if !readable[filepath.Clean(abs)] {
+			skipped = append(skipped, filepath.Base(raw)+"（当前用户无读取权限）")
+			continue
+		}
+		if len(imported) >= 50 {
+			break
 		}
 
 		var payload []byte
@@ -822,6 +926,8 @@ func (a *App) handleExternal(w http.ResponseWriter, r *http.Request) {
 			needGrant(path, kind)
 		case errors.Is(err, errNotText):
 			writeErr(w, http.StatusUnsupportedMediaType, err.Error())
+		case errors.Is(err, errNoPermission):
+			writeErr(w, http.StatusForbidden, err.Error())
 		default:
 			writeErr(w, http.StatusBadRequest, err.Error())
 		}
@@ -942,7 +1048,7 @@ func (a *App) handleExternal(w http.ResponseWriter, r *http.Request) {
 			fail(err, abs, "file")
 			return
 		}
-		file.DisplayPath = semanticPath(file.Path)
+		file.DisplayPath = semanticPath(file.Path, requestLanguage(r))
 		writeJSON(w, http.StatusOK, file)
 
 	case "save":
@@ -969,7 +1075,7 @@ func (a *App) handleExternal(w http.ResponseWriter, r *http.Request) {
 			fail(err, abs, "file")
 			return
 		}
-		file.DisplayPath = semanticPath(file.Path)
+		file.DisplayPath = semanticPath(file.Path, requestLanguage(r))
 		writeJSON(w, http.StatusOK, file)
 
 	case "grant":
@@ -993,6 +1099,10 @@ func (a *App) handleExternal(w http.ResponseWriter, r *http.Request) {
 		// 也避免前端被诱导登记任意系统路径。
 		if _, err := os.Stat(abs); err != nil {
 			writeErr(w, http.StatusForbidden, "应用仍无法访问该位置，请在系统弹窗中完成授权")
+			return
+		}
+		if !ua.aclOf(abs).Readable {
+			writeErr(w, http.StatusForbidden, errNoPermission.Error())
 			return
 		}
 		if err := ua.addGrant(abs); err != nil {

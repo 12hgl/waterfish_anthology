@@ -155,12 +155,12 @@ func (a *App) handleGitHubProxy(w http.ResponseWriter, r *http.Request) {
 			"active":   cfg.Active,
 			"custom":   cfg.Custom,
 			"presets":  proxyPresets,
-			"isAdmin":  ua.user.IsAdmin || ua.user.Source == "local",
+			"isAdmin":  ua.User().IsAdmin || ua.User().Source == "local",
 			"defaults": defaultProxyURL(),
 		})
 	case http.MethodPut:
 		// 加速线路影响整机对外访问，仅管理员（或局域网直连）可改
-		if !ua.user.IsAdmin && ua.user.Source != "local" {
+		if !ua.User().IsAdmin && ua.User().Source != "local" {
 			writeErr(w, http.StatusForbidden, "仅管理员可修改 GitHub 加速源")
 			return
 		}

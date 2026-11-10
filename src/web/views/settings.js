@@ -6,6 +6,7 @@ import { expPublishEnabled, openPublisherConfigDialog } from '../publish.js';
 
 const TUTORIAL_URL = 'https://blog.waterfish.ren/article/4023794e-eb27-8082-a989-db0ca64a70c9';
 const MAX_THEME_JS = 64 * 1024;
+const MAX_CUSTOM_THEMES = 20;
 
 // 内置主题：每套打包配色 / 字体 / 字号 / 背景（与 app.js 的 THEMES 表一致）
 const THEMES = [
@@ -284,7 +285,7 @@ export async function render(el, ctx) {
   };
 
   function themeCard(t, active, isCustom = false) {
-    const meta = isCustom ? fmtBytes((t.js || '').length) + ' · JS 主题' : `${t.font} · ${t.scale} · ${t.bg}`;
+    const meta = isCustom ? fmtBytes(new Blob([t.js || '']).size) + ' · JS 主题' : `${t.font} · ${t.scale} · ${t.bg}`;
     return `
       <button class="theme-card ${active ? 'is-active' : ''}" data-theme="${ui.esc(isCustom ? t.name : t.id)}" title="${ui.esc(t.name)}">
         <span class="theme-preview">
@@ -309,8 +310,8 @@ export async function render(el, ctx) {
         <span style="font-size:13px">选择 .js 主题文件</span>
       </label>
       <div class="ap-upload-meta">${custom.length
-        ? `已安装 ${custom.length} 个自定义主题，上传后以文件名命名，重名自动加 (2) 后缀`
-        : '上传后以文件名生成主题，上限 64 KB'}</div>`;
+        ? `已安装 ${custom.length}/${MAX_CUSTOM_THEMES} 个自定义主题，重名自动加 (2) 后缀`
+        : `上传后以文件名生成主题，单文件截断至 64 KB，最多 ${MAX_CUSTOM_THEMES} 个`}</div>`;
     bindUploadBox();
   };
 
@@ -324,24 +325,31 @@ export async function render(el, ctx) {
         input.value = '';
         return;
       }
-      if (file.size > MAX_THEME_JS) {
-        ui.toast('主题文件过大', '上限 64 KB，请精简后重试', 'err', 5000);
+      const installed = cur().themes || [];
+      if (installed.length >= MAX_CUSTOM_THEMES) {
+        ui.toast('自定义主题已达上限', `最多 ${MAX_CUSTOM_THEMES} 个，请先删除不再使用的主题`, 'err', 5000);
         input.value = '';
         return;
       }
+      const truncated = file.size > MAX_THEME_JS;
       try {
-        const text = await file.text();
+        // 与说明文档一致：超长文件只保留前 64 KB；服务端再按 UTF-8 字符边界收口。
+        const text = await file.slice(0, MAX_THEME_JS).text();
         if (!text.trim()) {
           ui.toast('主题文件为空', '请选择有效的 .js 文件', 'err', 4000);
           return;
         }
-        const taken = new Set([...THEMES.map((t) => t.name), ...(cur().themes || []).map((t) => t.name)]);
+        const taken = new Set([
+          ...THEMES.flatMap((t) => [t.id, t.name]),
+          ...installed.map((t) => t.name),
+        ]);
         const stem = file.name.replace(/\.js$/i, '').trim();
         const name = uniqueThemeName(stem || '自定义主题', taken);
-        const themes = [...(cur().themes || []), { name, js: text }];
+        const themes = [...installed, { name, js: text }];
         await ctx.saveAppearance({ theme: name, themes });
         paintThemes();
-        ui.toast('主题已添加', name, 'ok', 3000);
+        const savedName = cur().theme || name;
+        ui.toast(truncated ? '主题已添加并截断至 64 KB' : '主题已添加', savedName, 'ok', 3500);
       } catch { /* 错误提示已由 saveAppearance 给出 */ }
       finally { input.value = ''; }
     };

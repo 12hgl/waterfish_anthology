@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 )
 
 // ---------- 外观 ----------
@@ -14,8 +15,9 @@ const (
 	maxCustomThemes  = 20        // 自定义主题数量上限
 )
 
-// builtinThemes 内置主题 id（与前端 app.js 的 THEMES 表保持一致）。
+// 内置主题 id 与显示名（与前端 app.js 的 THEMES 表保持一致）。
 var builtinThemes = []string{"default", "amber", "forest", "violet", "rose"}
+var builtinThemeNames = []string{"纸墨", "琥珀", "松绿", "紫罗兰", "玫红"}
 
 func isBuiltinTheme(id string) bool {
 	for _, t := range builtinThemes {
@@ -60,7 +62,13 @@ func sanitizeThemeName(name string) string {
 
 // dedupeThemeNames 给重名主题加 (2)、(3)… 后缀，保证主题名唯一。
 func dedupeThemeNames(themes []CustomTheme) []CustomTheme {
-	used := make(map[string]bool, len(themes))
+	used := make(map[string]bool, len(themes)+len(builtinThemes)+len(builtinThemeNames))
+	for _, name := range builtinThemes {
+		used[name] = true
+	}
+	for _, name := range builtinThemeNames {
+		used[name] = true
+	}
 	out := make([]CustomTheme, 0, len(themes))
 	for _, t := range themes {
 		name := t.Name
@@ -121,6 +129,10 @@ func sanitizeAppearance(a AppearanceConfig) AppearanceConfig {
 		t.Name = sanitizeThemeName(t.Name)
 		if len(t.JS) > maxThemeJSSize {
 			t.JS = t.JS[:maxThemeJSSize]
+			// 按字节截断时退到 UTF-8 字符边界，避免中文脚本出现乱码。
+			for len(t.JS) > 0 && !utf8.ValidString(t.JS) {
+				t.JS = t.JS[:len(t.JS)-1]
+			}
 		}
 		themes = append(themes, t)
 	}

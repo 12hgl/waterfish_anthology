@@ -3,7 +3,12 @@
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
 async function req(path, opts = {}) {
-  const res = await fetch(path, { headers: JSON_HEADERS, ...opts });
+  // X-App-Language 供后端调用 trim.file.convertPath 时使用当前界面语言
+  const headers = {
+    'X-App-Language': (typeof navigator !== 'undefined' && navigator.language) || 'zh-CN',
+    ...(opts.headers || JSON_HEADERS),
+  };
+  const res = await fetch(path, { ...opts, headers });
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }

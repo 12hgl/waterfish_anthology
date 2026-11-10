@@ -100,24 +100,25 @@ function applyAppearance(ap) {
   }
 }
 
-// 自定义主题脚本：从服务端拉取当前用户的 theme.js 并执行。
-// 脚本新增的 <html> 行内变量会被记录，移除 / 替换主题时一并清理，
-// 避免朴素脚本（直接 setProperty）移除后留下残留样式。
-// 出错时保持内置外观，仅提示，不阻断使用。
-let themeScriptEl = null;
-let themeAddedProps = [];
+// 自定义主题脚本：从服务端拉取当前用户的 theme.js 并在页面主世界执行。
+// 执行前快照全部行内 CSS 变量，移除 / 替换主题时恢复旧值并删除新增值，
+// 因此脚本无论新增变量还是覆盖 --accent 等既有变量，都不会残留到下一主题。
+let themeBaseVars = null;
+let themeLoadSeq = 0;
 
-function clearThemeVars() {
-  themeAddedProps.forEach((p) => document.documentElement.style.removeProperty(p));
-  themeAddedProps = [];
+function clearCustomTheme() {
+  const style = document.documentElement.style;
+  if (themeBaseVars) {
+    [...style].filter((p) => p.startsWith('--') && !themeBaseVars.has(p))
+      .forEach((p) => style.removeProperty(p));
+    themeBaseVars.forEach((v, p) => style.setProperty(p, v.value, v.priority));
+  }
+  themeBaseVars = null;
 }
 
 async function loadCustomTheme() {
-  if (themeScriptEl) {
-    themeScriptEl.remove();
-    themeScriptEl = null;
-  }
-  clearThemeVars();
+  const seq = ++themeLoadSeq;
+  clearCustomTheme();
 
   let js = '';
   try {
@@ -126,16 +127,18 @@ async function loadCustomTheme() {
     if (!res.ok) throw new Error(String(res.status));
     js = (await res.text()).trim();
   } catch { return; }
-  if (!js) return;
+  if (!js || seq !== themeLoadSeq) return;
 
-  const before = new Set([...document.documentElement.style]);
+  const style = document.documentElement.style;
+  themeBaseVars = new Map([...style].filter((p) => p.startsWith('--')).map((p) => [p, {
+    value: style.getPropertyValue(p),
+    priority: style.getPropertyPriority(p),
+  }]));
   try {
-    themeScriptEl = document.createElement('script');
-    themeScriptEl.id = 'wf-custom-theme';
-    themeScriptEl.textContent = js;
-    document.body.appendChild(themeScriptEl);
-    themeAddedProps = [...document.documentElement.style].filter((p) => !before.has(p));
+    // new Function 在当前页面主世界执行，并能可靠捕获同步脚本异常。
+    new Function(js)();
   } catch (e) {
+    clearCustomTheme();
     ui.toast('自定义主题执行失败', String(e.message || e).slice(0, 120), 'err', 6000);
   }
 }
@@ -187,10 +190,13 @@ const ctx = {
   async saveAppearance(patch) {
     const next = { ...(ctx.state?.appearance || {}), ...patch };
     try {
-      await api.saveSettings({ appearance: next });
+      const saved = await api.saveSettings({ appearance: next });
+      const applied = saved.appearance || next;
       ctx.state = ctx.state || {};
-      ctx.state.appearance = next;
-      applyAppearance(next);
+      ctx.state.appearance = applied;
+      // 先恢复上一套自定义主题覆盖的变量，再应用新的内置基底。
+      clearCustomTheme();
+      applyAppearance(applied);
       // 主题脚本始终后置于内置外观执行，保持「自定义主题优先」语义
       await loadCustomTheme();
     } catch (e) {

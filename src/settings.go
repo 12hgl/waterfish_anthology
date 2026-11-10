@@ -51,9 +51,9 @@ func (a *App) handleState(w http.ResponseWriter, r *http.Request) {
 		"version": a.Version,
 		"port":    a.Port,
 		"user": map[string]any{
-			"name":    ua.user.Name,
-			"isAdmin": ua.user.IsAdmin,
-			"source":  ua.user.Source,
+			"name":    ua.User().Name,
+			"isAdmin": ua.User().IsAdmin,
+			"source":  ua.User().Source,
 		},
 		"storageRoot":        ua.StorageRoot(),
 		"storageBase":        ua.StorageBase(),
@@ -106,7 +106,7 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.Cloudinary != nil {
 			// 图床凭证影响整机上传流向，仅管理员（或局域网直连）可修改
-			if !ua.user.IsAdmin && ua.user.Source != "local" {
+			if !ua.User().IsAdmin && ua.User().Source != "local" {
 				writeErr(w, http.StatusForbidden, "仅管理员可修改图床设置")
 				return
 			}
@@ -132,7 +132,10 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "没有需要保存的设置")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":         true,
+			"appearance": ua.Appearance(),
+		})
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "方法不允许")
 	}
@@ -151,7 +154,7 @@ func (a *App) handleSetStorage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 存储路径影响整机数据布局，仅管理员（或局域网直连）可更改
-	if !ua.user.IsAdmin && ua.user.Source != "local" {
+	if !ua.User().IsAdmin && ua.User().Source != "local" {
 		writeErr(w, http.StatusForbidden, "仅管理员可更改存储路径")
 		return
 	}
@@ -188,7 +191,7 @@ func (a *App) handleSetStorage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 自定义路径下按用户建子文件夹，多账号共存互不覆盖
-		newRoot = filepath.Join(abs, ua.user.Key)
+		newRoot = filepath.Join(abs, ua.User().Key)
 	}
 
 	old := ua.StorageRoot()

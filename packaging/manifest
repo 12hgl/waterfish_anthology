@@ -1,5 +1,5 @@
 appname               = waterfish_anthology
-version               = 1.2.0
+version               = 1.2.1
 display_name           = 水鱼文集
 desc                  = 面向写作与内容整理的 Markdown 文集：文章库、图片库（本地 / Cloudinary 图床）、SEO 检测与自定义存储路径；可直接打开磁盘上的 Markdown / 纯文本 / Word / PDF / EPUB 等文档，.md 与纯文本编辑保存，版式文档只读预览并可另存为文章；支持从任意文件夹导入、把外部文件加入文章库。接入飞牛统一网关，NAS 账号免登打开，各账号数据独立。
 source                = thirdparty
@@ -8,7 +8,7 @@ platform              = x86
 maintainer            = waterfish
 maintainer_url        = https://github.com/12hgl/waterfish_anthology
 
-os_min_version        = 1.0.0
+os_min_version        = 1.2.0401
 
 desktop_uidir         = ui
 desktop_applaunchname = waterfish_anthology.main
@@ -19,4 +19,4 @@ ctl_stop              = true
 
 micro_app             = true
 
-changelog             = 1.2.0 新增：① 更多格式直接打开——.txt/.md/.tex 可直接编辑写回，.docx/.odt/.rtf/.html/.epub/.pdf 打开即解析为正文只读预览，可一键另存为文集文章（.doc/.pages 为闭源二进制，会提示另存为 .docx 或 PDF）；② 外部文件可加入文章库（不复制内容，条目只记录路径，正文始终读写原文件，可随时移出）；③ 支持发布到 WordPress；④ 管理员设置新增 GitHub 加速源（默认关闭，可选用预设线路或自行添加）。
+changelog             = 1.2.1 修复：① 外部文档的打开、预览、扫描、导入与加入文章库全面按当前 NAS 用户权限复核，开放接口异常时拒绝访问；② 展示路径按当前界面语言转换；③ 自定义主题清理被覆盖变量，64 KB 截断与 20 个上限更准确；④ 启停脚本防止 PID 复用误杀，重启失败不再被吞。1.2.0 新增：① 更多格式直接打开——.txt/.md/.tex 可直接编辑写回，.docx/.odt/.rtf/.html/.epub/.pdf 打开即解析为正文只读预览，可一键另存为文集文章（.doc/.pages 为闭源二进制，会提示另存为 .docx 或 PDF）；② 外部文件可加入文章库（不复制内容，条目只记录路径，正文始终读写原文件，可随时移出）；③ 支持发布到 WordPress；④ 管理员设置新增 GitHub 加速源（默认关闭，可选用预设线路或自行添加）。

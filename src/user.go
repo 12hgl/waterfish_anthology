@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode"
 )
 
@@ -109,7 +110,10 @@ func (a *App) resolveUser(r *http.Request) *User {
 // UserApp 单个登录用户的应用视图：独立配置与存储，共享 App 的系统级上下文。
 type UserApp struct {
 	*App
-	user *User
+
+	// identity 每次请求都替换为网关当前下发的身份，避免缓存旧的管理员权限。
+	// User 对象写入后不再修改，因此用原子指针即可安全读写。
+	identity atomic.Pointer[User]
 
 	mu  sync.RWMutex
 	cfg Config
@@ -121,12 +125,14 @@ func (a *App) forUser(u *User) *UserApp {
 	ua, ok := a.users[u.Key]
 	a.usersMu.RUnlock()
 	if ok {
+		ua.identity.Store(u)
 		return ua
 	}
 
 	a.usersMu.Lock()
 	defer a.usersMu.Unlock()
 	if existing, ok := a.users[u.Key]; ok {
+		existing.identity.Store(u)
 		return existing
 	}
 	ua = newUserApp(a, u)
@@ -135,16 +141,22 @@ func (a *App) forUser(u *User) *UserApp {
 }
 
 func newUserApp(a *App, u *User) *UserApp {
-	ua := &UserApp{App: a, user: u}
+	ua := &UserApp{App: a}
+	ua.identity.Store(u)
 	ua.loadConfig()
 	ua.ensureStorage()
 	return ua
 }
 
-// User 返回当前用户身份。
-func (u *UserApp) User() *User { return u.user }
+// User 返回本次请求的用户身份快照。
+func (u *UserApp) User() *User {
+	if user := u.identity.Load(); user != nil {
+		return user
+	}
+	return &User{Key: localUserKey, Name: "本地直连", Source: "local", IsAdmin: true}
+}
 
-func (u *UserApp) userDir() string { return filepath.Join(u.VarDir, "users", u.user.Key) }
+func (u *UserApp) userDir() string { return filepath.Join(u.VarDir, "users", u.User().Key) }
 
 // DefaultStorageRoot 该用户的默认存储根目录（应用数据目录下按账号隔离）。
 func (u *UserApp) DefaultStorageRoot() string { return filepath.Join(u.userDir(), "data") }
@@ -178,17 +190,17 @@ func (u *UserApp) loadConfig() {
 			if migrated := sanitizeAppearance(u.cfg.Appearance); !reflect.DeepEqual(migrated, u.cfg.Appearance) {
 				u.cfg.Appearance = migrated
 				if err := u.saveConfig(); err != nil {
-					log.Printf("迁移用户 %s 的外观配置失败: %v", u.user.Name, err)
+					log.Printf("迁移用户 %s 的外观配置失败: %v", u.User().Name, err)
 				}
 			}
 			// 自定义存储路径下按用户建子文件夹：旧版数据平铺在路径根下，加载时下移
 			u.adoptUserSubfolder()
 			return
 		}
-		log.Printf("用户 %s 的配置损坏，按默认处理", u.user.Name)
+		log.Printf("用户 %s 的配置损坏，按默认处理", u.User().Name)
 	}
 	// 首次使用：管理员或本地直连继承升级前的共享配置与数据，保证历史文章/图片不丢
-	if u.user.IsAdmin || u.user.Source == "local" {
+	if u.User().IsAdmin || u.User().Source == "local" {
 		u.adoptLegacy()
 		// 继承来的共享路径同样套用户子文件夹：
 		// 旧数据平铺在路径根下时当次会话即下移，避免升级后文章看似丢失
@@ -210,7 +222,7 @@ func (u *UserApp) adoptLegacy() {
 			log.Printf("历史配置解析失败，按默认处理: %v", err)
 		}
 	} else if !os.IsNotExist(err) {
-		log.Printf("读取历史配置失败(%s): %v", u.user.Name, err)
+		log.Printf("读取历史配置失败(%s): %v", u.User().Name, err)
 	}
 
 	adopted := false
@@ -229,11 +241,11 @@ func (u *UserApp) adoptLegacy() {
 	u.cfg.Cloudinary = c.Cloudinary
 
 	if err := u.saveConfig(); err != nil {
-		log.Printf("继承历史配置失败(%s): %v", u.user.Name, err)
+		log.Printf("继承历史配置失败(%s): %v", u.User().Name, err)
 		return
 	}
 	// 认领成功后落标记，防止其他管理员重复继承
-	if err := os.WriteFile(u.legacyAdoptedMarker(), []byte(u.user.Key), 0o644); err != nil {
+	if err := os.WriteFile(u.legacyAdoptedMarker(), []byte(u.User().Key), 0o644); err != nil {
 		log.Printf("写入历史认领标记失败: %v", err)
 	}
 }
@@ -251,7 +263,7 @@ func (u *UserApp) adoptUserSubfolder() {
 	if strings.TrimSpace(root) == "" || root == u.DefaultStorageRoot() {
 		return
 	}
-	sub := filepath.Join(root, u.user.Key)
+	sub := filepath.Join(root, u.User().Key)
 	if _, err := os.Stat(filepath.Join(sub, dirPassage)); err == nil {
 		return // 已是按用户分子文件夹的新布局
 	}
@@ -259,9 +271,9 @@ func (u *UserApp) adoptUserSubfolder() {
 		if _, err := os.Stat(filepath.Join(root, d)); err != nil {
 			continue
 		}
-		log.Printf("用户 %s 的存储数据下移到用户子文件夹：%s -> %s", u.user.Name, root, sub)
+		log.Printf("用户 %s 的存储数据下移到用户子文件夹：%s -> %s", u.User().Name, root, sub)
 		if err := moveStorageDown(root, sub); err != nil {
-			log.Printf("下移存储数据失败(%s): %v", u.user.Name, err)
+			log.Printf("下移存储数据失败(%s): %v", u.User().Name, err)
 		}
 		return
 	}
@@ -341,7 +353,7 @@ func (u *UserApp) effectiveRoot(configured string) string {
 	if strings.TrimSpace(configured) == "" || configured == u.DefaultStorageRoot() {
 		return u.DefaultStorageRoot()
 	}
-	return filepath.Join(configured, u.user.Key)
+	return filepath.Join(configured, u.User().Key)
 }
 
 // Cloudinary 当前用户的图床配置。

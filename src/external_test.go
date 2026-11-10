@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -126,7 +127,7 @@ func TestExternalFlow(t *testing.T) {
 	}
 
 	ua := &UserApp{App: &App{VarDir: root, AuthPaths: []string{root}}}
-	ua.user = &User{Key: "tester", Name: "tester"}
+	ua.identity.Store(&User{Key: "tester", Name: "tester", Source: "local"})
 
 	got, err := ua.openExternal(file)
 	if err != nil {
@@ -169,6 +170,94 @@ func TestExternalFlow(t *testing.T) {
 	}
 	if !strings.Contains(string(mustRead(t, ua.articlePathOrFail(imported[0].ID))), "tags: [x]") {
 		t.Error("导入应保留原 frontmatter")
+	}
+}
+
+// TestGatewayACLFailClosed 验证网关请求在开放接口不可用时全部拒绝，
+// 不能把「应用运行用户能访问」误判成「当前 NAS 用户能访问」。
+func TestGatewayACLFailClosed(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "notes")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "a.md")
+	if err := os.WriteFile(file, []byte("正文"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ua := &UserApp{App: &App{VarDir: root, AuthPaths: []string{root}}}
+	ua.identity.Store(&User{Key: "gateway-user", Name: "gateway-user", ID: "1000", Source: "gateway"})
+
+	if _, err := ua.openExternal(file); err == nil {
+		t.Error("网关用户打开文件应先过 ACL，接口不可用时必须拒绝")
+	}
+	if _, _, err := ua.externalRaw(file); err == nil {
+		t.Error("原始字节下发应拒绝")
+	}
+	if err := ua.checkWritable(file); err == nil {
+		t.Error("写入前应拒绝")
+	}
+	if _, _, err := ua.scanExternalDir(dir); err == nil {
+		t.Error("目录扫描应拒绝")
+	}
+	imported, skipped := ua.importExternal([]string{file})
+	if len(imported) != 0 || len(skipped) != 1 {
+		t.Errorf("导入应被拒绝：%v / %v", imported, skipped)
+	}
+	if _, err := ua.addLink(file, "甲"); err == nil {
+		t.Error("加入文章库应拒绝")
+	}
+
+	ua.ensureStorage()
+	if err := ua.writeLinks([]linkedArticle{{ID: linkIDFor(file), Path: file, Title: "甲", Created: nowStamp()}}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := ua.listArticles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range list {
+		if m.External && m.Path == file {
+			found = true
+			if !m.Missing || m.Size != 0 {
+				t.Errorf("无读取权限的外链条目不应泄露文件状态：%+v", m)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("应保留外链条目并标记失效")
+	}
+}
+
+// TestUserIdentityRefresh 同一账号的 UserApp 不能缓存旧的管理员身份。
+func TestUserIdentityRefresh(t *testing.T) {
+	root := t.TempDir()
+	a := &App{EtcDir: root, VarDir: root, users: map[string]*UserApp{}}
+
+	ua := a.forUser(&User{Key: "alice", Name: "alice", ID: "1001", Source: "gateway", IsAdmin: false})
+	if ua.User().IsAdmin {
+		t.Fatal("初始非管理员被误判为管理员")
+	}
+	a.forUser(&User{Key: "alice", Name: "alice", ID: "1001", Source: "gateway", IsAdmin: true})
+	if !ua.User().IsAdmin {
+		t.Fatal("管理员变更后仍使用旧身份")
+	}
+}
+
+func TestRequestLanguage(t *testing.T) {
+	r, _ := http.NewRequest(http.MethodPost, "/api/external/open", nil)
+	if got := requestLanguage(r); got != "zh-CN" {
+		t.Errorf("默认语言应为 zh-CN，得到 %q", got)
+	}
+	r.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	if got := requestLanguage(r); got != "en-US" {
+		t.Errorf("应取 Accept-Language 首选语言，得到 %q", got)
+	}
+	r.Header.Set("X-App-Language", "zh-TW")
+	if got := requestLanguage(r); got != "zh-TW" {
+		t.Errorf("显式界面语言优先，得到 %q", got)
 	}
 }
 
