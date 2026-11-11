@@ -38,6 +38,8 @@ export const api = {
 
   images: () => req('api/images'),
   deleteImage: (name) => req(`api/images/local?name=${enc(name)}`, { method: 'DELETE' }),
+  // 批量删除：{ local: [文件名], cloud: [publicId 或序号] }
+  deleteImages: (body) => req('api/images/batch', { method: 'POST', body: JSON.stringify(body) }),
   upload: (file) => {
     const fd = new FormData();
     fd.append('file', file, file.name || 'image.png');
@@ -56,6 +58,8 @@ export const api = {
   githubProxy: () => req('api/settings/github'),
   saveGithubProxy: (body) => req('api/settings/github', { method: 'PUT', body: JSON.stringify(body) }),
   saveSettings: (body) => req('api/settings', { method: 'PUT', body: JSON.stringify(body) }),
+  // 发布功能开关（每账号独立，默认开启）
+  setPublishEnabled: (enabled) => req('api/settings', { method: 'PUT', body: JSON.stringify({ publishEnabled: enabled }) }),
   setStorage: (path) => req('api/settings/storage', { method: 'POST', body: JSON.stringify({ path }) }),
   browse: (path) => req('api/browse' + (path ? `?path=${enc(path)}` : '')),
 

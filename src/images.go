@@ -40,6 +40,9 @@ var imageExts = map[string]bool{
 	".webp": true, ".avif": true, ".bmp": true, ".svg": true,
 }
 
+// maxBatchImages 图片库一次批量操作的数量上限。
+const maxBatchImages = 500
+
 var mdImageRe = regexp.MustCompile(`!\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)`)
 
 func (u *UserApp) cloudIndexPath() string { return filepath.Join(u.MetaDir(), "cloud.json") }
@@ -121,6 +124,61 @@ func (a *App) handleImage(w http.ResponseWriter, r *http.Request) {
 	}
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/images/"), "/")
 	switch {
+	case rest == "batch" && r.Method == http.MethodPost:
+		// 批量删除：一次提交本地文件名与图床记录标识，逐项处理并回报失败项
+		var in struct {
+			Local []string `json:"local"`
+			Cloud []string `json:"cloud"`
+		}
+		if err := readJSON(r, &in); err != nil {
+			writeErr(w, http.StatusBadRequest, "请求格式错误")
+			return
+		}
+		if len(in.Local)+len(in.Cloud) > maxBatchImages {
+			writeErr(w, http.StatusBadRequest, "一次最多处理 500 张图片")
+			return
+		}
+		deletedLocal, deletedCloud := 0, 0
+		failed := []string{}
+		for _, raw := range in.Local {
+			name, err := safeName(raw)
+			if err != nil || !imageExts[strings.ToLower(filepath.Ext(name))] {
+				failed = append(failed, raw)
+				continue
+			}
+			if err := os.Remove(filepath.Join(ua.PhotoDir(), name)); err != nil {
+				failed = append(failed, name)
+				continue
+			}
+			ua.forgetPhotoHash(name)
+			deletedLocal++
+		}
+		if len(in.Cloud) > 0 {
+			want := make(map[string]bool, len(in.Cloud))
+			for _, k := range in.Cloud {
+				want[k] = true
+			}
+			list := ua.loadCloudIndex()
+			out := make([]CloudImage, 0, len(list))
+			for i, c := range list {
+				if want[fmt.Sprint(i)] || want[c.PublicID] || want[c.URL] {
+					deletedCloud++
+					continue
+				}
+				out = append(out, c)
+			}
+			if deletedCloud > 0 {
+				if err := ua.saveCloudIndex(out); err != nil {
+					writeErr(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"deletedLocal": deletedLocal,
+			"deletedCloud": deletedCloud,
+			"failed":       failed,
+		})
 	case rest == "local" && r.Method == http.MethodDelete:
 		// 批量删除：/api/images/local?name=xxx
 		name, err := safeName(r.URL.Query().Get("name"))

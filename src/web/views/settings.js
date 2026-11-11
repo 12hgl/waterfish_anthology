@@ -2,7 +2,7 @@
 
 import { api } from '../api.js';
 import * as ui from '../ui.js';
-import { expPublishEnabled, openPublisherConfigDialog } from '../publish.js';
+import { openPublisherConfigDialog } from '../publish.js';
 
 const TUTORIAL_URL = 'https://blog.waterfish.ren/article/4023794e-eb27-8082-a989-db0ca64a70c9';
 const MAX_THEME_JS = 64 * 1024;
@@ -34,7 +34,7 @@ export async function render(el, ctx) {
   const st = ctx.state || await ctx.refreshState();
   const isAdmin = !!st.user?.isAdmin || st.user?.source === 'local';
   const ap = st.appearance || {};
-  const expPublish = expPublishEnabled();
+  const publishOn = st.publishEnabled !== false;
 
   el.innerHTML = `
     <div class="page-head">
@@ -46,8 +46,9 @@ export async function render(el, ctx) {
     <div class="subnav" id="subnav">
       <button class="subnav-item is-active" data-tab="account">账号</button>
       <button class="subnav-item" data-tab="appearance">外观</button>
+      <button class="subnav-item" data-tab="publish">发布设置</button>
       ${isAdmin ? '<button class="subnav-item" data-tab="admin">管理员设置</button>' : ''}
-      <button class="subnav-item" data-tab="updates">更新与实验</button>
+      <button class="subnav-item" data-tab="updates">更新</button>
       <button class="subnav-item" data-tab="about">关于</button>
     </div>
 
@@ -94,6 +95,39 @@ export async function render(el, ctx) {
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- 发布设置（所有账号可用；装载插件仅管理员） -->
+    <div data-panel="publish" hidden>
+      <div class="card card-pad section">
+        <div class="section-title">发布文章（Beta）</div>
+        <div class="exp-row">
+          <div class="exp-info">
+            <b>启用发布</b>
+            <p>开启后文章编辑页会显示「发布」按钮：可复制发布（有图床时图片自动转成直链），也可统一发布到已安装的平台。开关、密钥都按账号独立保存。</p>
+          </div>
+          <label class="switch" title="开启 / 关闭发布功能">
+            <input type="checkbox" id="pubToggle" ${publishOn ? 'checked' : ''}>
+            <span class="switch-track"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="card card-pad section">
+        <div class="section-title">已安装平台</div>
+        <p class="section-desc">${isAdmin
+          ? '平台适配器装在系统目录，装一次全体账号可用；每个账号填写自己的密钥，互相不可见。'
+          : '平台由管理员安装，全体账号可用；在这里填写你自己的密钥，其他账号看不到。'}</p>
+        <div class="pub-admin-list" id="pubList"></div>
+      </div>
+
+      ${isAdmin ? `
+      <div class="card card-pad section">
+        <div class="section-title">安装 / 卸载平台（仅管理员）</div>
+        <p class="section-desc">适配器代码托管在项目仓库，按需下载，不内置在安装包里。</p>
+        <div class="pub-admin-list" id="pubAvailable"></div>
+        <span class="hint" id="pubListError"></span>
+      </div>` : ''}
     </div>
 
     <!-- 管理员设置：图床 + 存储路径（仅管理员可见） -->
@@ -201,7 +235,7 @@ export async function render(el, ctx) {
       </div>
     </div>` : ''}
 
-    <!-- 更新与实验 -->
+    <!-- 更新 -->
     <div class="card card-pad section" data-panel="updates" hidden>
       <div class="section-title">检测更新</div>
       <p class="section-desc">当前版本 v${ui.esc(st.version)}</p>
@@ -209,24 +243,6 @@ export async function render(el, ctx) {
         <button class="btn btn-primary btn-sm" id="checkUpdateBtn">${ui.icon('refresh', 14)}<span>检查更新</span></button>
       </div>
       <div class="update-result" id="updateResult" hidden></div>
-
-      <div class="section-title" style="margin-top:28px">实验性功能</div>
-      <div class="exp-row">
-        <div class="exp-info">
-          <b>文章发布（Beta）</b>
-          <p>在文章编辑页显示「发布」按钮：支持复制发布（文章与图片按序写入剪贴板），也可下载适配器后直接发布到 NotionNext 等建站系统。</p>
-        </div>
-        <label class="switch" title="开启 / 关闭发布功能">
-          <input type="checkbox" id="expPublishToggle" ${expPublish ? 'checked' : ''}>
-          <span class="switch-track"></span>
-        </label>
-      </div>
-
-      <div class="pub-admin" id="pubAdmin" ${expPublish ? '' : 'hidden'}>
-        <div class="section-title" style="margin-top:24px">发布适配器</div>
-        <p class="section-desc">适配器代码托管在项目仓库，按需下载；密钥仅保存在本机。</p>
-        <div class="pub-admin-list" id="pubAdminList"></div>
-      </div>
     </div>
 
     <!-- 关于 -->
@@ -418,17 +434,30 @@ export async function render(el, ctx) {
     }
   };
 
-  /* ---------- 实验性功能：发布 Beta ---------- */
-  $('#expPublishToggle').onchange = (e) => {
+  /* ---------- 发布设置 ---------- */
+  const pubToggle = $('#pubToggle');
+  pubToggle.onchange = async (e) => {
     const on = e.target.checked;
-    try { localStorage.setItem('wf.exp.publish', on ? '1' : '0'); } catch { /* 隐私模式忽略 */ }
-    $('#pubAdmin').hidden = !on;
-    if (on) paintPublishers();
-    ui.toast(on ? '已开启文章发布（Beta）' : '已关闭文章发布', on ? '文章编辑页将显示「发布」按钮' : '', on ? 'ok' : 'info');
+    pubToggle.disabled = true;
+    try {
+      await api.setPublishEnabled(on);
+      if (ctx.state) ctx.state.publishEnabled = on;
+      ui.toast(on ? '已启用发布' : '已关闭发布',
+        on ? '文章编辑页将显示「发布」按钮' : '编辑页不再显示发布入口',
+        on ? 'ok' : 'info');
+    } catch (err) {
+      e.target.checked = !on;
+      ui.toast('保存失败', err.message, 'err');
+    } finally {
+      pubToggle.disabled = false;
+    }
   };
 
-  const pubList = $('#pubAdminList');
-  const paintPublishers = async () => {
+  const pubList = $('#pubList');
+  const pubAvailable = $('#pubAvailable');
+  const pubListError = $('#pubListError');
+
+  const paintPublish = async () => {
     pubList.innerHTML = '<div class="pub-admin-loading">加载中…</div>';
     let r;
     try {
@@ -437,43 +466,65 @@ export async function render(el, ctx) {
       pubList.innerHTML = `<div class="hint" style="color:var(--err)">加载失败：${ui.esc(e.message)}</div>`;
       return;
     }
+    if (r.enabled !== undefined) {
+      pubToggle.checked = !!r.enabled;
+      if (ctx.state) ctx.state.publishEnabled = !!r.enabled;
+    }
     const installed = r.installed || [];
     const available = (r.available || []).filter((a) => !installed.some((p) => p.id === a.id));
-    const rows = [
-      ...installed.map((p) => `
+
+    pubList.innerHTML = installed.length
+      ? installed.map((p) => `
         <div class="pub-admin-row">
           <div class="pub-admin-info">
             <b>${ui.esc(p.name || p.id)}</b>
-            <span class="pub-admin-meta">v${ui.esc(p.version || '?')}${p.missing ? ' · 文件丢失，请重新下载' : ''}</span>
+            <span class="pub-admin-meta">v${ui.esc(p.version || '?')}${p.missing ? ' · 文件丢失，需管理员重新安装' : ''}</span>
             ${p.desc ? `<span class="pub-admin-desc">${ui.esc(p.desc)}</span>` : ''}
           </div>
           <div class="pub-admin-ops">
-            <button class="btn btn-ghost btn-sm" data-pub-config="${ui.esc(p.id)}">配置</button>
-            <button class="btn btn-danger btn-sm" data-pub-del="${ui.esc(p.id)}">卸载</button>
+            <button class="btn btn-ghost btn-sm" data-pub-config="${ui.esc(p.id)}" ${p.missing ? 'disabled' : ''}>配置</button>
+            ${isAdmin ? `<button class="btn btn-danger btn-sm" data-pub-del="${ui.esc(p.id)}">卸载</button>` : ''}
           </div>
-        </div>`),
-      ...available.map((a) => `
-        <div class="pub-admin-row is-available">
-          <div class="pub-admin-info">
-            <b>${ui.esc(a.name || a.id)}</b>
-            <span class="pub-admin-meta">未安装</span>
-            ${a.desc ? `<span class="pub-admin-desc">${ui.esc(a.desc)}</span>` : ''}
-          </div>
-          <div class="pub-admin-ops">
-            <button class="btn btn-ghost btn-sm" data-pub-install="${ui.esc(a.id)}"
-              data-name="${ui.esc(a.name || '')}" data-desc="${ui.esc(a.desc || '')}">下载</button>
-          </div>
-        </div>`),
-    ].join('');
-    pubList.innerHTML = rows || '<div class="pub-admin-empty">暂无适配器</div>';
-    if (r.error) {
-      pubList.innerHTML += `<div class="hint" style="color:var(--warn);margin-top:8px">${ui.esc(r.error)}</div>`;
+        </div>`).join('')
+      : `<div class="pub-admin-empty">还没有安装平台${isAdmin ? '，可在下方下载' : '，请联系管理员安装'}</div>`;
+
+    if (pubAvailable) {
+      pubAvailable.innerHTML = available.length
+        ? available.map((a) => `
+          <div class="pub-admin-row is-available">
+            <div class="pub-admin-info">
+              <b>${ui.esc(a.name || a.id)}</b>
+              <span class="pub-admin-meta">未安装${a.version ? ` · v${ui.esc(a.version)}` : ''}</span>
+              ${a.desc ? `<span class="pub-admin-desc">${ui.esc(a.desc)}</span>` : ''}
+            </div>
+            <div class="pub-admin-ops">
+              <button class="btn btn-ghost btn-sm" data-pub-install="${ui.esc(a.id)}"
+                data-name="${ui.esc(a.name || '')}" data-desc="${ui.esc(a.desc || '')}">下载安装</button>
+            </div>
+          </div>`).join('')
+        : '<div class="pub-admin-empty">仓库清单里没有可安装的平台</div>';
+      pubListError.textContent = r.error || '';
+      pubAvailable.querySelectorAll('[data-pub-install]').forEach((btn) => {
+        btn.onclick = async () => {
+          btn.disabled = true;
+          btn.textContent = '下载中…';
+          try {
+            const p = await api.installPublisher(btn.dataset.pubInstall, btn.dataset.name, btn.dataset.desc);
+            ui.toast('平台已安装', p.name || p.id, 'ok');
+            paintPublish();
+          } catch (e) {
+            btn.disabled = false;
+            btn.textContent = '下载安装';
+            ui.toast('安装失败', e.message, 'err', 6000);
+          }
+        };
+      });
     }
 
     pubList.querySelectorAll('[data-pub-config]').forEach((btn) => {
       btn.onclick = () => {
         const meta = installed.find((p) => p.id === btn.dataset.pubConfig);
-        if (meta) openPublisherConfigDialog(meta, paintPublishers);
+        if (meta) openPublisherConfigDialog(meta, paintPublish);
       };
     });
     pubList.querySelectorAll('[data-pub-del]').forEach((btn) => {
@@ -481,34 +532,19 @@ export async function render(el, ctx) {
         const meta = installed.find((p) => p.id === btn.dataset.pubDel);
         const ok = await ui.confirmDialog({
           title: `卸载「${meta ? (meta.name || meta.id) : btn.dataset.pubDel}」？`,
-          desc: '适配器文件与已保存的密钥配置将被移除。',
+          desc: '适配器文件与所有账号保存的该平台密钥都会被移除，且不可恢复。',
           okText: '卸载', danger: true,
         });
         if (!ok) return;
         try {
           await api.removePublisher(btn.dataset.pubDel);
           ui.toast('已卸载', '', 'ok');
-          paintPublishers();
+          paintPublish();
         } catch (e) { ui.toast('卸载失败', e.message, 'err'); }
       };
     });
-    pubList.querySelectorAll('[data-pub-install]').forEach((btn) => {
-      btn.onclick = async () => {
-        btn.disabled = true;
-        btn.textContent = '下载中…';
-        try {
-          const p = await api.installPublisher(btn.dataset.pubInstall, btn.dataset.name, btn.dataset.desc);
-          ui.toast('适配器已安装', p.name || p.id, 'ok');
-          paintPublishers();
-        } catch (e) {
-          btn.disabled = false;
-          btn.textContent = '下载';
-          ui.toast('下载失败', e.message, 'err', 6000);
-        }
-      };
-    });
   };
-  if (expPublish) paintPublishers();
+  paintPublish();
 
   /* ---------- 管理员：GitHub 加速源 ---------- */
   const ghToggle = $('#ghProxyToggle');

@@ -14,7 +14,7 @@ import (
 )
 
 // Version 由构建脚本通过 -ldflags 注入。
-var Version = "1.2.1"
+var Version = "1.2.2"
 
 const (
 	dirPassage = "passage"
@@ -62,10 +62,16 @@ type AppearanceConfig struct {
 
 // Config 单用户配置，持久化在 ${TRIM_PKGVAR}/users/<用户>/config.json。
 type Config struct {
-	StorageRoot string            `json:"storageRoot"`
-	Cloudinary  CloudConfig       `json:"cloudinary"`
-	Appearance  AppearanceConfig  `json:"appearance"`
-	Publishers  []PublisherConfig `json:"publishers,omitempty"` // 已安装的发布适配器（实验性功能）
+	StorageRoot string           `json:"storageRoot"`
+	Cloudinary  CloudConfig      `json:"cloudinary"`
+	Appearance  AppearanceConfig `json:"appearance"`
+
+	// Publishers 当前用户的发布账号配置（按适配器 ID 存密钥等，账号间互相隔离）。
+	// 适配器文件本身由管理员在系统级安装，普通用户只配置自己的凭据。
+	Publishers []PublisherConfig `json:"publishers,omitempty"`
+
+	// PublishEnabled 发布功能开关（nil = 默认开启）。每用户独立。
+	PublishEnabled *bool `json:"publishEnabled,omitempty"`
 }
 
 // App 应用上下文（系统级共享状态；每用户数据见 UserApp）。
@@ -81,6 +87,8 @@ type App struct {
 
 	usersMu sync.RWMutex
 	users   map[string]*UserApp
+
+	publishersMu sync.Mutex // 适配器文件 / 清单的读写锁（系统级）
 }
 
 func env(key, fallback string) string {
@@ -107,6 +115,7 @@ func NewApp() *App {
 		}
 	}
 	loadGitHubProxy(a.EtcDir)
+	a.adoptLegacyPublishers()
 	return a
 }
 

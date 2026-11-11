@@ -1,20 +1,13 @@
-/* 文章发布（实验性 Beta）
- * 两种方式：
- *  1) 复制发布 —— 先复制文章（富文本），再按引用顺序逐张复制本地图片
- *  2) 发布到建站系统 —— 加载仓库适配器（NotionNext 等），配置密钥后直接发布
+/* 文章发布
+ * 1) 复制发布 —— 复制文章（富文本）。有图床时把本地图片自动换成图床直链，
+ *    粘贴到任意编辑器都能直接显示图片；没有图床则保留逐张复制图片的能力。
+ * 2) 统一发布 —— 勾选多个平台一次发布；适配器由管理员在「设置 → 发布设置」安装，
+ *    每个账号只配置自己的密钥（账号间互相隔离）。
  */
 
 import { api } from './api.js';
 import * as ui from './ui.js';
 import { renderMarkdown, buildCopyHTML } from './markdown.js';
-
-/* ---------------- 实验开关 ---------------- */
-
-const EXP_KEY = 'wf.exp.publish';
-
-export function expPublishEnabled() {
-  try { return localStorage.getItem(EXP_KEY) === '1'; } catch { return false; }
-}
 
 /* ---------------- 文章中的本地图片 ---------------- */
 
@@ -32,6 +25,15 @@ export function localImagesOf(markdown) {
   return out;
 }
 
+// 把 Markdown 里的本地图片引用替换为图床直链（未命中链接的保持原样）
+function applyCloudLinks(markdown, links) {
+  return markdown.replace(/(!\[[^\]]*\]\()([^)\s]+)((?:\s+"[^"]*")?\))/g, (m, pre, src, post) => {
+    if (/^(https?:)?\/\//i.test(src) || /^data:/i.test(src)) return m;
+    const name = decodeURIComponent(src.split('/').pop());
+    return links[name] ? pre + links[name] + post : m;
+  });
+}
+
 /* ---------------- 适配器加载 ---------------- */
 
 // 经服务端本地文件加载适配器（安装时已落盘，发布不依赖外网）
@@ -47,7 +49,7 @@ function loadAdapter(id) {
       if (reg && typeof reg.publish === 'function') resolve(reg);
       else reject(new Error('适配器未正确注册'));
     };
-    s.onerror = () => reject(new Error('适配器加载失败，请卸载后重新下载'));
+    s.onerror = () => reject(new Error('适配器加载失败，请让管理员重新安装'));
     document.head.appendChild(s);
   });
 }
@@ -87,7 +89,7 @@ export async function openPublisherConfigDialog(meta, onSaved) {
   }
   ui.modal(`
     <div class="modal-head"><h3>${ui.esc(meta.name || meta.id)} · 配置</h3>
-    <p>密钥仅保存在本机，不会随文章上传。</p></div>
+    <p>密钥保存在你自己的账号下，不会随文章上传，也不会被其他账号看到。</p></div>
     <div class="modal-body">
       <div class="field-stack">${configFieldsHTML(fields, meta.config, 'cfg')}</div>
     </div>
@@ -118,28 +120,56 @@ export async function openPublisherConfigDialog(meta, onSaved) {
   });
 }
 
-/* ---------------- 复制发布 ---------------- */
+/* ---------------- 图片转公网链接 ---------------- */
 
-async function copyImage(name, btn) {
+async function copyImageBlob(name, btn) {
   btn.disabled = true;
-  btn.textContent = '复制中…';
   try {
     if (!(navigator.clipboard && window.isSecureContext && window.ClipboardItem)) {
-      throw new Error('当前浏览器不支持图片剪贴板（需 HTTPS 或 localhost 环境），请手动保存图片后插入');
+      throw new Error('当前环境不支持图片剪贴板（需 HTTPS 或 localhost），请手动保存图片后插入');
     }
     const res = await fetch('photo/' + encodeURIComponent(name));
     if (!res.ok) throw new Error(`读取图片失败 (HTTP ${res.status})`);
     const blob = await res.blob();
     const type = (blob.type || 'image/png').toLowerCase();
     await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
-    btn.textContent = '已复制';
+    btn.innerHTML = `${ui.icon('check', 14)}<span>已复制</span>`;
     btn.classList.add('is-done');
+    return true;
   } catch (e) {
-    btn.textContent = '重试';
     ui.toast('复制图片失败', e.message, 'err', 6000);
+    return false;
   } finally {
     btn.disabled = false;
   }
+}
+
+// 把文章里的本地图片转成公网 URL：
+// 已上传过图床的直接复用；图床可用且本地可读的自动上传；其余保留相对名并告警。
+async function resolveImages(markdown, onProgress) {
+  const state = await api.images().catch(() => ({ cloud: [], cloudEnabled: false }));
+  const links = {};
+  (state.cloud || []).forEach((c) => { if (c && c.name) links[c.name] = c.url; });
+  const cloudOn = !!state.cloudEnabled;
+
+  const warnings = [];
+  const names = localImagesOf(markdown);
+  for (const name of names) {
+    if (links[name]) continue;
+    if (!cloudOn) { warnings.push(name); continue; }
+    try {
+      onProgress && onProgress(`正在上传图片 ${name}…`);
+      const res = await fetch('photo/' + encodeURIComponent(name));
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const blob = await res.blob();
+      const up = await api.upload(new File([blob], name, { type: blob.type || 'image/png' }));
+      if (up && up.url) links[name] = up.url;
+      else throw new Error((up && up.error) || '上传失败');
+    } catch (e) {
+      warnings.push(`${name}（${e.message}）`);
+    }
+  }
+  return { markdown: applyCloudLinks(markdown, links), links, warnings, cloudOn };
 }
 
 /* ---------------- 远程发布 ---------------- */
@@ -151,86 +181,32 @@ function excerptOf(markdown, max = 120) {
   return text.length > max ? text.slice(0, max) + '…' : text;
 }
 
-// 把 Markdown 中的本地图片替换为公网 URL：
-// 已上传过图床的直接用现成地址；图床可用且本地可读的自动上传；其余保留相对名并告警。
-async function resolveImages(markdown, onProgress) {
-  const imgState = await api.images();
-  const cloud = imgState.cloud || [];
-  const cloudByName = {};
-  cloud.forEach((c) => { if (c && c.name) cloudByName[c.name] = c; });
-  const cloudOn = !!imgState.cloudEnabled;
-
-  const warnings = [];
-  const cache = {}; // name -> url | null(失败)
-
-  const re = /!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
-  let out = '';
-  let last = 0;
-  let m;
-  while ((m = re.exec(markdown))) {
-    out += markdown.slice(last, m.index);
-    last = m.index + m[0].length;
-    const src = m[1].trim();
-    if (/^(https?:)?\/\//i.test(src) || /^data:/i.test(src)) {
-      out += m[0]; // 云端图片原样保留
-      continue;
-    }
-    const name = decodeURIComponent(src.split('/').pop());
-    if (name in cache) {
-      out += cache[name] ? m[0].replace(src, cache[name]) : m[0];
-      continue;
-    }
-    if (cloudByName[name]) {
-      cache[name] = cloudByName[name].url;
-      out += m[0].replace(src, cache[name]);
-      continue;
-    }
-    if (cloudOn) {
-      try {
-        onProgress && onProgress(`正在上传图片 ${name}…`);
-        const res = await fetch('photo/' + encodeURIComponent(name));
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const blob = await res.blob();
-        const file = new File([blob], name, { type: blob.type || 'image/png' });
-        const up = await api.upload(file);
-        if (up && up.url) {
-          cache[name] = up.url;
-          out += m[0].replace(src, cache[name]);
-          continue;
-        }
-        throw new Error(up && up.error ? up.error : '上传失败');
-      } catch (e) {
-        cache[name] = null;
-        warnings.push(`${name}（${e.message}）`);
-        out += m[0];
-        continue;
-      }
-    }
-    cache[name] = null;
-    warnings.push(name);
-    out += m[0];
-  }
-  out += markdown.slice(last);
-  return { markdown: out, warnings };
-}
-
 /* ---------------- 发布弹窗 ---------------- */
 
 export async function openPublishDialog(ctx, art) {
-  // 拉取适配器清单（installed 立即可用；available 供弹窗内直接下载）
   let installed = [];
-  let available = [];
+  let isAdmin = false;
   let listError = '';
   try {
     const r = await api.publishers();
     installed = r.installed || [];
-    available = r.available || [];
+    isAdmin = !!r.isAdmin;
     listError = r.error || '';
   } catch (e) {
     listError = e.message;
   }
 
-  const imgs = localImagesOf(art.content);
+  // 图床链接表：用于直接在复制发布里给出图片直链
+  const imgState = await api.images().catch(() => ({ cloud: [], cloudEnabled: false }));
+  const cloudLinks = {};
+  (imgState.cloud || []).forEach((c) => { if (c && c.name) cloudLinks[c.name] = c.url; });
+  const cloudOn = !!imgState.cloudEnabled;
+
+  const imgNames = localImagesOf(art.content);
+  const linked = imgNames.filter((n) => cloudLinks[n]);
+  const unlinked = imgNames.filter((n) => !cloudLinks[n]);
+
+  const usable = installed.filter((p) => !p.missing);
 
   ui.modal(`
     <div class="modal-head">
@@ -240,27 +216,34 @@ export async function openPublishDialog(ctx, art) {
 
     <div class="pub-tabs">
       <button class="pub-tab is-active" data-mode="copy">复制发布</button>
-      <button class="pub-tab" data-mode="remote">发布到…</button>
+      <button class="pub-tab" data-mode="remote">统一发布</button>
     </div>
 
     <div class="pub-pane" data-pane="copy">
       <div class="pub-step">
         <div class="pub-step-head"><span class="pub-step-no">1</span>复制文章</div>
-        <p class="pub-step-desc">把文章以富文本形式写入剪贴板，粘贴到 Notion 等编辑器时标题、列表、粗体原样保留。</p>
-        <button class="btn btn-primary btn-sm" id="pubCopyText">${ui.icon('copy', 14)}<span>复制文章</span></button>
+        <p class="pub-step-desc">以富文本写入剪贴板，粘贴到 Notion、公众号等编辑器时标题、列表、粗体原样保留。${cloudOn
+          ? '文中本地图片会自动上传并替换为图床直链，粘贴后图片直接可见。'
+          : '当前未启用图床，本地图片会以文件名占位，可在下一步逐张复制图片。'}</p>
+        <div class="pub-actions-row">
+          <button class="btn btn-primary btn-sm" id="pubCopyText">${ui.icon('copy', 14)}<span>复制文章</span></button>
+          ${imgNames.length ? `<button class="btn btn-ghost btn-sm" id="pubCopyLinks">${ui.icon('link', 14)}<span>复制全部图片链接</span></button>` : ''}
+        </div>
+        ${imgNames.length && !cloudOn ? '<p class="pub-step-desc" style="margin-top:10px">逐张复制图片需要 HTTPS 或本机访问；否则请手动插入图片。</p>' : ''}
       </div>
       <div class="pub-step">
-        <div class="pub-step-head"><span class="pub-step-no">2</span>按顺序复制图片${imgs.length ? `（共 ${imgs.length} 张）` : ''}</div>
-        ${imgs.length ? `
+        <div class="pub-step-head"><span class="pub-step-no">2</span>图片${imgNames.length ? `（${linked.length} 张已有直链 / 共 ${imgNames.length} 张）` : ''}</div>
+        ${imgNames.length ? `
           <div class="pub-imgs" id="pubImgs">
-            ${imgs.map((n, i) => `
-              <div class="pub-img-row">
+            ${imgNames.map((n, i) => `
+              <div class="pub-img-row" data-name="${ui.esc(n)}">
                 <span class="pub-img-no">${i + 1}</span>
                 <span class="pub-img-name" title="${ui.esc(n)}">${ui.esc(n)}</span>
-                <button class="btn btn-ghost btn-sm" data-img="${ui.esc(n)}">复制图片</button>
+                ${cloudLinks[n]
+                  ? `<span class="pub-img-tag">图床</span><button class="btn btn-ghost btn-sm" data-link="${ui.esc(cloudLinks[n])}">${ui.icon('link', 13)}<span>复制链接</span></button>`
+                  : `<span class="pub-img-tag is-local">本地</span><button class="btn btn-ghost btn-sm" data-blob="${ui.esc(n)}">${ui.icon('copy', 13)}<span>复制图片</span></button>`}
               </div>`).join('')}
           </div>
-          <p class="pub-step-desc">图片按文中出现顺序逐张复制；在编辑器里把文章粘贴好后，依次粘贴即可。</p>
         ` : '<p class="pub-step-desc">本文没有引用本地图片，无需此步。</p>'}
       </div>
     </div>
@@ -275,21 +258,22 @@ export async function openPublishDialog(ctx, art) {
         <input class="input" id="pubTags" placeholder="多个标签用逗号分隔" spellcheck="false">
       </div>
       <div class="field">
-        <label>发布到</label>
+        <label>发布到（可多选，一次统一发布）</label>
         <div class="pub-picker" id="pubPicker"></div>
         ${listError ? `<span class="hint" style="color:var(--warn)">适配器清单加载失败：${ui.esc(listError)}</span>` : ''}
       </div>
       <div class="pub-remote-actions">
-        <button class="btn btn-ghost btn-sm" id="pubConfigBtn">${ui.icon('pencil', 14)}<span>适配器配置</span></button>
-        <button class="btn btn-primary btn-sm" id="pubSendBtn">${ui.icon('rocket', 14)}<span>发布</span></button>
+        <button class="btn btn-ghost btn-sm" id="pubConfigBtn">${ui.icon('pencil', 14)}<span>配置选中平台</span></button>
+        <button class="btn btn-primary btn-sm" id="pubSendBtn">${ui.icon('rocket', 14)}<span>统一发布</span></button>
       </div>
+      <div class="pub-results" id="pubResults" hidden></div>
       <div class="pub-status" id="pubStatus"></div>
 
       <!-- 适配器配置内联区：不放子弹窗（modal 为单例，会顶掉发布弹窗） -->
       <div class="pub-config" id="pubConfig" hidden>
         <div class="pub-config-head">
-          <b id="pubConfigTitle">适配器配置</b>
-          <span class="hint">密钥仅保存在本机</span>
+          <b id="pubConfigTitle">平台配置</b>
+          <span class="hint">密钥仅保存在你的账号下</span>
         </div>
         <div id="pubConfigFields"></div>
         <div class="pub-config-foot">
@@ -318,94 +302,100 @@ export async function openPublishDialog(ctx, art) {
       });
 
       /* ---------- 复制发布 ---------- */
-      root.querySelector('#pubCopyText').onclick = async (e) => {
-        const btn = e.currentTarget;
-        btn.disabled = true;
-        btn.textContent = '复制中…';
+      const copyBtn = root.querySelector('#pubCopyText');
+
+      copyBtn.onclick = async () => {
+        const old = copyBtn.innerHTML;
+        copyBtn.disabled = true;
+        copyBtn.innerHTML = '<span class="spinner"></span><span>处理中…</span>';
         try {
           const r = await api.copyArticle(art.id);
-          await ui.copyRich(buildCopyHTML(r.text), r.text, '文章已复制到剪贴板');
+          // 有图床时把本地图片补传并替换成直链（粘贴出去就能看到图）
+          const text = cloudOn
+            ? (await resolveImages(r.text, (m) => ui.toast('正在准备图片', m, 'info', 1600))).markdown
+            : applyCloudLinks(r.text, cloudLinks);
+          await ui.copyRich(buildCopyHTML(text), text, '文章已复制到剪贴板');
         } catch (err) {
           ui.toast('复制失败', err.message, 'err');
         } finally {
-          btn.disabled = false;
-          btn.innerHTML = `${ui.icon('copy', 14)}<span>复制文章</span>`;
+          copyBtn.disabled = false;
+          copyBtn.innerHTML = old;
         }
       };
-      root.querySelectorAll('[data-img]').forEach((btn) => {
-        btn.onclick = () => copyImage(btn.dataset.img, btn);
+
+      const copyLinksBtn = root.querySelector('#pubCopyLinks');
+      copyLinksBtn && (copyLinksBtn.onclick = async () => {
+        copyLinksBtn.disabled = true;
+        try {
+          const fresh = await api.images().catch(() => ({ cloud: [] }));
+          const links = {};
+          (fresh.cloud || []).forEach((c) => { if (c && c.name) links[c.name] = c.url; });
+          const urls = imgNames.map((n) => links[n]).filter(Boolean);
+          if (!urls.length) {
+            ui.toast('还没有图片直链', '启用图床后发布会自动上传', 'warn', 5000);
+            return;
+          }
+          ui.copy(urls.join('\n'), `已复制 ${urls.length} 条图片链接`);
+        } finally {
+          copyLinksBtn.disabled = false;
+        }
       });
 
-      /* ---------- 远程发布 ---------- */
-      let selected = '';
+      root.querySelectorAll('[data-link]').forEach((btn) => {
+        btn.onclick = () => ui.copy(btn.dataset.link, '图片链接已复制');
+      });
+      root.querySelectorAll('[data-blob]').forEach((btn) => {
+        btn.onclick = () => copyImageBlob(btn.dataset.blob, btn);
+      });
+
+      /* ---------- 统一发布 ---------- */
       const picker = root.querySelector('#pubPicker');
       const status = root.querySelector('#pubStatus');
+      const results = root.querySelector('#pubResults');
+      const selected = new Set(usable.map((p) => p.id)); // 默认全选已安装平台
 
       const paintPicker = () => {
-        if (!installed.length && !available.length) {
-          picker.innerHTML = '<div class="pub-empty">暂无可用适配器</div>';
+        if (!installed.length) {
+          picker.innerHTML = `<div class="pub-empty">还没有安装发布适配器。${isAdmin
+            ? '前往「设置 → 发布设置」下载。'
+            : '请联系管理员在「设置 → 发布设置」中安装。'}</div>`;
           return;
         }
-        picker.innerHTML = [
-          ...installed.map((p) => `
-            <label class="pub-card ${p.missing ? 'is-missing' : ''}">
-              <input type="radio" name="pubAdapter" value="${ui.esc(p.id)}" ${selected === p.id ? 'checked' : ''}>
-              <span class="pub-card-body">
-                <b>${ui.esc(p.name || p.id)}</b>
-                <span class="pub-card-meta">v${ui.esc(p.version || '?')}${p.missing ? ' · 文件丢失，请重新下载' : ''}</span>
-                ${p.desc ? `<span class="pub-card-desc">${ui.esc(p.desc)}</span>` : ''}
-              </span>
-            </label>`),
-          ...available.filter((a) => !installed.some((p) => p.id === a.id)).map((a) => `
-            <div class="pub-card is-available">
-              <span class="pub-card-body">
-                <b>${ui.esc(a.name || a.id)}</b>
-                <span class="pub-card-meta">未安装</span>
-                ${a.desc ? `<span class="pub-card-desc">${ui.esc(a.desc)}</span>` : ''}
-              </span>
-              <button class="btn btn-ghost btn-sm" data-install="${ui.esc(a.id)}" data-name="${ui.esc(a.name || '')}" data-desc="${ui.esc(a.desc || '')}">下载</button>
-            </div>`),
-        ].join('');
-        picker.querySelectorAll('input[name="pubAdapter"]').forEach((r) => {
-          r.onchange = () => { selected = r.value; };
-        });
-        picker.querySelectorAll('[data-install]').forEach((btn) => {
-          btn.onclick = async () => {
-            btn.disabled = true;
-            btn.textContent = '下载中…';
-            try {
-              const p = await api.installPublisher(btn.dataset.install, btn.dataset.name, btn.dataset.desc);
-              installed.push({ ...p, config: {}, missing: false });
-              ui.toast('适配器已安装', p.name, 'ok');
-              paintPicker();
-            } catch (e) {
-              btn.disabled = false;
-              btn.textContent = '下载';
-              ui.toast('下载失败', e.message, 'err', 6000);
-            }
+        picker.innerHTML = installed.map((p) => `
+          <label class="pub-card ${p.missing ? 'is-missing' : ''}">
+            <input type="checkbox" name="pubAdapter" value="${ui.esc(p.id)}"
+              ${selected.has(p.id) ? 'checked' : ''} ${p.missing ? 'disabled' : ''}>
+            <span class="pub-card-body">
+              <b>${ui.esc(p.name || p.id)}</b>
+              <span class="pub-card-meta">v${ui.esc(p.version || '?')}${p.missing ? ' · 文件丢失，请管理员重新安装' : ''}</span>
+              ${p.desc ? `<span class="pub-card-desc">${ui.esc(p.desc)}</span>` : ''}
+            </span>
+          </label>`).join('');
+        picker.querySelectorAll('input[name="pubAdapter"]').forEach((box) => {
+          box.onchange = () => {
+            if (box.checked) selected.add(box.value);
+            else selected.delete(box.value);
           };
         });
-        if (!selected && installed.length && !installed[0].missing) selected = installed[0].id;
       };
       paintPicker();
 
-      /* ---------- 适配器配置（内联展开） ---------- */
+      /* ---------- 平台配置（内联展开） ---------- */
       let cfgFields = [];
       let cfgMeta = null;
       const cfgBox = root.querySelector('#pubConfig');
       const cfgFieldsBox = root.querySelector('#pubConfigFields');
 
       root.querySelector('#pubConfigBtn').onclick = async () => {
-        if (!selected) { ui.toast('请先选择发布目标', '', 'warn'); return; }
-        const meta = installed.find((p) => p.id === selected);
+        const ids = [...selected];
+        if (!ids.length) { ui.toast('请先勾选发布平台', '', 'warn'); return; }
+        const id = ids[0] === (cfgMeta && cfgMeta.id) && ids.length > 1 ? ids[1] : ids[0];
+        const meta = usable.find((p) => p.id === id);
         if (!meta) return;
-        if (!cfgBox.hidden && cfgMeta && cfgMeta.id === selected) {
-          cfgBox.hidden = true; // 再次点击收起
-          return;
-        }
+        if (!cfgBox.hidden && cfgMeta && cfgMeta.id === id) { cfgBox.hidden = true; return; } // 再次点击收起
         let fields = [];
         try {
-          const reg = await loadAdapter(selected);
+          const reg = await loadAdapter(id);
           fields = Array.isArray(reg.configFields) ? reg.configFields : [];
         } catch (e) {
           ui.toast('加载适配器失败', e.message, 'err', 6000);
@@ -413,7 +403,7 @@ export async function openPublishDialog(ctx, art) {
         }
         cfgFields = fields;
         cfgMeta = meta;
-        root.querySelector('#pubConfigTitle').textContent = `${meta.name || selected} · 配置`;
+        root.querySelector('#pubConfigTitle').textContent = `${meta.name || id} · 配置${ids.length > 1 ? '（逐个平台配置）' : ''}`;
         cfgFieldsBox.innerHTML = configFieldsHTML(fields, meta.config, 'pubcfg');
         cfgBox.hidden = false;
         cfgBox.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -436,26 +426,31 @@ export async function openPublishDialog(ctx, art) {
         }
       };
 
-      /* ---------- 发布 ---------- */
+      /* ---------- 统一发布 ---------- */
       root.querySelector('#pubSendBtn').onclick = async (e) => {
         const btn = e.currentTarget;
-        if (!selected) { ui.toast('请先选择发布目标', '', 'warn'); return; }
-        const meta = installed.find((p) => p.id === selected);
-        if (!meta) { ui.toast('适配器未安装', '', 'warn'); return; }
-        const cfg = meta.config || {};
-        const missingReq = [];
+        const ids = [...selected];
+        if (!ids.length) { ui.toast('请先勾选发布平台', '', 'warn'); return; }
         btn.disabled = true;
+        results.hidden = false;
+        results.innerHTML = ids.map((id) => {
+          const meta = usable.find((p) => p.id === id) || { id };
+          return `<div class="pub-result" data-res="${ui.esc(id)}">
+            <span class="pub-result-dot"></span>
+            <b>${ui.esc(meta.name || id)}</b>
+            <span class="pub-result-msg">等待中…</span>
+          </div>`;
+        }).join('');
         status.className = 'pub-status is-busy';
-        status.textContent = '正在准备…';
+        status.textContent = '正在准备图片…';
+        const setRow = (id, cls, msg) => {
+          const row = results.querySelector(`[data-res="${CSS.escape(id)}"]`);
+          if (!row) return;
+          row.className = `pub-result ${cls}`;
+          row.querySelector('.pub-result-msg').innerHTML = msg;
+        };
         try {
-          const reg = await loadAdapter(selected);
-          const fields = Array.isArray(reg.configFields) ? reg.configFields : [];
-          fields.forEach((f) => { if (f.required && !cfg[f.key]) missingReq.push(f.label || f.key); });
-          if (missingReq.length) {
-            throw new Error(`请先配置：${missingReq.join('、')}`);
-          }
-          status.textContent = '正在处理图片…';
-          const { markdown, warnings } = await resolveImages(art.content);
+          const { markdown, warnings } = await resolveImages(art.content, (m) => { status.textContent = m; });
           const payload = {
             title: root.querySelector('#pubTitle').value.trim() || art.title || '未命名文章',
             tags: root.querySelector('#pubTags').value.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
@@ -463,14 +458,31 @@ export async function openPublishDialog(ctx, art) {
             excerpt: excerptOf(art.content),
             date: new Date().toISOString(),
           };
-          status.textContent = '正在发布…';
-          const result = await reg.publish(payload, cfg);
-          status.className = 'pub-status is-ok';
-          status.innerHTML = `发布成功${result && result.url ? ` · <a href="${ui.esc(result.url)}" target="_blank" rel="noopener noreferrer">查看页面</a>` : ''}`;
+          let okCount = 0;
+          for (const id of ids) {
+            const meta = usable.find((p) => p.id === id);
+            setRow(id, 'is-busy', '发布中…');
+            status.textContent = `正在发布到 ${meta ? (meta.name || id) : id}…`;
+            try {
+              const reg = await loadAdapter(id);
+              const fields = Array.isArray(reg.configFields) ? reg.configFields : [];
+              const cfg = (meta && meta.config) || {};
+              const missingReq = fields.filter((f) => f.required && !cfg[f.key]).map((f) => f.label || f.key);
+              if (missingReq.length) throw new Error(`请先配置：${missingReq.join('、')}`);
+              const r = await reg.publish(payload, cfg);
+              okCount++;
+              setRow(id, 'is-ok', `成功${r && r.url
+                ? ` · <a href="${ui.esc(r.url)}" target="_blank" rel="noopener noreferrer">查看页面</a>` : ''}`);
+            } catch (err) {
+              setRow(id, 'is-err', ui.esc(err.message));
+            }
+          }
+          status.className = okCount ? 'pub-status is-ok' : 'pub-status is-err';
+          status.textContent = `已发布到 ${okCount}/${ids.length} 个平台`;
+          ui.toast(okCount ? '发布完成' : '发布失败', okCount ? `${okCount}/${ids.length} 个平台成功` : '请查看下方各平台结果', okCount ? 'ok' : 'err', 5000);
           if (warnings.length) {
             ui.toast('部分图片未能转为公网链接', warnings.slice(0, 3).join('；'), 'warn', 8000);
           }
-          ui.toast('发布成功', payload.title, 'ok');
         } catch (err) {
           status.className = 'pub-status is-err';
           status.textContent = `发布失败：${err.message}`;

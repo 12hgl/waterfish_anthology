@@ -18,7 +18,7 @@
 | 字段 | 现状 | 说明 |
 | --- | --- | --- |
 | `appname` | `waterfish_anthology` | 唯一标识 |
-| `version` | `1.2.1` | 构建脚本按 `VERSION` 注入 |
+| `version` | `1.2.2` | 构建脚本按 `VERSION` 注入 |
 | `display_name` / `desc` | ✅ | 描述含实际能力，无占位文案 |
 | `source` | `thirdparty` | |
 | `platform` | `x86` / `arm` | 分架构构建 |

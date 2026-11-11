@@ -10,8 +10,8 @@ package main
 
 import (
 	"archive/zip"
-	"encoding/xml"
 	"bytes"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"html"

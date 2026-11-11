@@ -62,6 +62,7 @@ func (a *App) handleState(w http.ResponseWriter, r *http.Request) {
 		"roots":              roots,
 		"cloudinary":         cfg,
 		"appearance":         ua.Appearance(),
+		"publishEnabled":     ua.PublishEnabled(),
 		"stats": map[string]int{
 			"articles":    len(articles),
 			"localImages": len(ua.listLocalImages()),
@@ -90,15 +91,17 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, map[string]any{
-			"storageRoot": ua.StorageRoot(),
-			"cloudinary":  ua.Cloudinary(),
-			"appearance":  ua.Appearance(),
+			"storageRoot":    ua.StorageRoot(),
+			"cloudinary":     ua.Cloudinary(),
+			"appearance":     ua.Appearance(),
+			"publishEnabled": ua.PublishEnabled(),
 		})
 	case http.MethodPut:
 		// 分段保存：请求体带哪段就更新哪段，未带的段保持原值
 		var in struct {
-			Cloudinary *CloudConfig      `json:"cloudinary"`
-			Appearance *AppearanceConfig `json:"appearance"`
+			Cloudinary     *CloudConfig      `json:"cloudinary"`
+			Appearance     *AppearanceConfig `json:"appearance"`
+			PublishEnabled *bool             `json:"publishEnabled"`
 		}
 		if err := readJSON(r, &in); err != nil {
 			writeErr(w, http.StatusBadRequest, "请求体格式错误")
@@ -106,7 +109,7 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.Cloudinary != nil {
 			// 图床凭证影响整机上传流向，仅管理员（或局域网直连）可修改
-			if !ua.User().IsAdmin && ua.User().Source != "local" {
+			if !ua.isAdmin() {
 				writeErr(w, http.StatusForbidden, "仅管理员可修改图床设置")
 				return
 			}
@@ -128,13 +131,20 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if in.Cloudinary == nil && in.Appearance == nil {
+		if in.PublishEnabled != nil {
+			if err := ua.setPublishEnabled(*in.PublishEnabled); err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		if in.Cloudinary == nil && in.Appearance == nil && in.PublishEnabled == nil {
 			writeErr(w, http.StatusBadRequest, "没有需要保存的设置")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":         true,
-			"appearance": ua.Appearance(),
+			"ok":             true,
+			"appearance":     ua.Appearance(),
+			"publishEnabled": ua.PublishEnabled(),
 		})
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "方法不允许")
@@ -154,7 +164,7 @@ func (a *App) handleSetStorage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 存储路径影响整机数据布局，仅管理员（或局域网直连）可更改
-	if !ua.User().IsAdmin && ua.User().Source != "local" {
+	if !ua.isAdmin() {
 		writeErr(w, http.StatusForbidden, "仅管理员可更改存储路径")
 		return
 	}

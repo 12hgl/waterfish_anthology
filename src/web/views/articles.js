@@ -4,7 +4,7 @@ import { api } from '../api.js';
 import * as ui from '../ui.js';
 import { renderMarkdown, buildCopyHTML } from '../markdown.js';
 import { createHistory } from '../editor.js';
-import { openPublishDialog, expPublishEnabled } from '../publish.js';
+import { openPublishDialog } from '../publish.js';
 import { openImportDialog, authorizePath, revealInManager } from '../external.js';
 
 const local = { list: [], keyword: '' };
@@ -296,7 +296,9 @@ function renderGrantGate(el, ctx, path, needGrant, message) {
 
 async function renderEditor(el, ctx, id, ext) {
   const isExt = !!(ext && ext.path);
-  const isNew = id === 'new';
+  let isNew = id === 'new';
+  // 发布功能默认开启（设置里可按账号关闭）
+  const publishOn = !isExt && ctx.state?.publishEnabled !== false;
   let art = { id: '', title: '', content: '', created: '', updated: '' };
   let dirty = false;
   let autoSave = false;  // 每篇文章独立的自动保存开关（持久化在文章旁的 .wf.json）
@@ -336,10 +338,12 @@ async function renderEditor(el, ctx, id, ext) {
           : (isNew ? '尚未保存' : `更新于 ${ui.fmtDate(art.updated)}`)}</span>
         <button class="btn btn-ghost btn-sm" id="autoSaveBtn" title="自动保存">${ui.icon('check', 13)}<span id="autoSaveLabel">自动保存</span></button>
         ${isExt ? '' : `<button class="btn btn-ghost btn-sm" id="copyBtn" title="复制文章（兼容 Notion 粘贴）">${ui.icon('copy', 14)}<span>复制</span></button>`}
-        ${!isExt && expPublishEnabled() ? `<button class="btn btn-ghost btn-sm" id="publishBtn" title="发布文章">${ui.icon('rocket', 14)}<span>发布</span></button>` : ''}
         <button class="btn btn-ghost btn-sm" id="viewBtn" title="切换编辑 / 分栏 / 预览">${ui.icon('columns', 14)}<span id="viewLabel">分栏</span></button>
         ${isNew || isExt ? '' : `<button class="btn btn-danger btn-sm" id="delBtn">${ui.icon('trash', 14)}<span>删除</span></button>`}
-        <button class="btn btn-primary btn-sm" id="saveBtn">${ui.icon('save', 14)}<span>保存</span></button>
+        <div class="head-actions">
+          ${publishOn ? `<button class="btn btn-ghost btn-sm" id="publishBtn" title="发布到平台或复制发布">${ui.icon('rocket', 14)}<span>发布</span></button>` : ''}
+          <button class="btn btn-primary btn-sm" id="saveBtn">${ui.icon('save', 14)}<span>保存</span></button>
+        </div>
       </div>
       ${isExt ? `
       <div class="ext-bar">
@@ -647,20 +651,22 @@ async function renderEditor(el, ctx, id, ext) {
         saved = isNew
           ? await api.createArticle({ title, content })
           : await api.updateArticle(prevID, { title, content });
+        isNew = false;
         art = saved;
+        // 标题变化会换文件名与 ID。这里只静默替换地址，不重挂编辑器：
+        // 否则开启自动保存后每改一次标题都会整页重渲染（表现为加载动画反复闪现）。
+        if (saved.id !== prevID) {
+          await flushEditorState();
+          ctx.params = { id: saved.id };
+          ctx.syncHash('#articles/' + encodeURIComponent(saved.id));
+          ensureDeleteBtn();
+        }
       }
       dirty = false;
       statusEl.textContent = auto
         ? `已自动保存 · ${nowTime()}`
         : (isExt ? `已写回原文件 · ${nowTime()}` : `已保存 · ${ui.fmtDate(saved.updated)}`);
       statusEl.style.color = 'var(--ok)';
-      // 新建或标题变化导致文件名变更时，先落盘侧车状态再同步地址重挂编辑器
-      if (!isExt && (isNew || saved.id !== prevID)) {
-        await flushEditorState();
-        const hash = '#articles/' + encodeURIComponent(saved.id);
-        if (location.hash === hash) ctx.route();
-        else location.hash = hash;
-      }
       ctx.refreshState();
       if (!auto) ui.toast(isExt ? '已写回原文件' : '已保存', isExt ? saved.name : saved.title, 'ok', 2000);
       return true;
@@ -740,7 +746,7 @@ async function renderEditor(el, ctx, id, ext) {
       content: mdEl.value,
     });
   });
-  $('#delBtn') && ($('#delBtn').onclick = async () => {
+  const onDelete = async () => {
     const ok = await ui.confirmDialog({
       title: '删除这篇文章？',
       desc: '对应 .md 文件将被移除，且无法恢复。',
@@ -753,7 +759,18 @@ async function renderEditor(el, ctx, id, ext) {
       ui.toast('已删除', '', 'ok');
       ctx.navigate('articles'); // 直接回列表，避免按已删除的 ID 重渲染出 404
     } catch (e) { ui.toast('删除失败', e.message, 'err'); }
-  });
+  };
+  const bindDelete = () => { const b = $('#delBtn'); if (b) b.onclick = onDelete; };
+  bindDelete();
+  // 新文章首次保存后不再重挂编辑器，删除按钮改为就地补上
+  const ensureDeleteBtn = () => {
+    if ($('#delBtn')) return;
+    const actions = el.querySelector('.head-actions');
+    if (!actions) return;
+    actions.insertAdjacentHTML('beforebegin',
+      `<button class="btn btn-danger btn-sm" id="delBtn">${ui.icon('trash', 14)}<span>删除</span></button>`);
+    bindDelete();
+  };
   $('#back').onclick = () => ctx.navigate('articles'); // 未保存提示由路由层统一处理
 
   // 离开确认：侧边栏 / 返回 / 浏览器后退都经 hashchange 触发这里

@@ -1,7 +1,9 @@
-// 水鱼文集 —— 发布适配器管理（实验性功能）
+// 水鱼文集 —— 发布适配器管理
+//
 // 适配器是独立 JS 文件，托管在仓库 publishers/ 目录，不内置在应用内。
-// 用户在「设置 → 实验性功能」中按需下载（直连失败走 gh-proxy 加速），
-// 下载后配置密钥等信息，文章编辑页即可直接发布到对应建站系统。
+// 安装 / 卸载是系统级操作（仅管理员）：文件落在 ${TRIM_PKGVAR}/publishers，
+// 元数据登记在同目录的 publishers.json，装一次全体账号可用。
+// 各账号的密钥配置按适配器 ID 存在自己的 config.json 里，互相隔离。
 package main
 
 import (
@@ -23,19 +25,30 @@ const (
 	maxPublisherBytes = 256 << 10
 )
 
-// PublisherConfig 单个已安装发布适配器的配置（含用户填写的密钥等）。
+// PublisherConfig 单个发布适配器的用户级配置（密钥等）。
+// Name / Desc / Version 为 1.2.x 的遗留字段，读取旧配置时兼容，不再写入。
 type PublisherConfig struct {
-	ID      string            `json:"id"`
-	Name    string            `json:"name"`
-	Desc    string            `json:"desc"`
-	Version string            `json:"version"`
-	Config  map[string]string `json:"config"`
+	ID     string            `json:"id"`
+	Config map[string]string `json:"config,omitempty"`
+
+	Name    string `json:"name,omitempty"`
+	Desc    string `json:"desc,omitempty"`
+	Version string `json:"version,omitempty"`
 }
 
-// InstalledPublisher 已安装适配器（附带文件是否存在标记）。
+// PublisherMeta 适配器的系统级元数据（登记在 publishers.json）。
+type PublisherMeta struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Desc    string `json:"desc"`
+	Version string `json:"version"`
+}
+
+// InstalledPublisher 已安装适配器 + 当前用户的配置。
 type InstalledPublisher struct {
-	PublisherConfig
-	Missing bool `json:"missing"` // 文件丢失（如数据目录被清理），需重新下载
+	PublisherMeta
+	Config  map[string]string `json:"config"`
+	Missing bool              `json:"missing"` // 文件丢失（如数据目录被清理），需管理员重新下载
 }
 
 // AvailablePublisher 仓库侧可下载的适配器元数据。
@@ -51,7 +64,14 @@ type AvailablePublisher struct {
 type PublishersResponse struct {
 	Installed []InstalledPublisher `json:"installed"`
 	Available []AvailablePublisher `json:"available"`
-	Error     string               `json:"error,omitempty"` // 清单拉取失败说明（installed 仍可用）
+	Enabled   bool                 `json:"enabled"` // 当前用户的发布开关
+	IsAdmin   bool                 `json:"isAdmin"` // 是否可安装 / 卸载适配器
+	Error     string               `json:"error,omitempty"`
+}
+
+// isAdmin 当前用户是否具备系统级设置权限（网关管理员或本机直连）。
+func (u *UserApp) isAdmin() bool {
+	return u.User().IsAdmin || u.User().Source == "local"
 }
 
 // sanitizePublisherID 清洗适配器 ID 为安全文件名（防路径穿越）。
@@ -68,74 +88,186 @@ func sanitizePublisherID(id string) (string, error) {
 	return id, nil
 }
 
-// publishersDir 适配器文件目录（跟随用户配置目录，与 config.json 同级）。
-func (u *UserApp) publishersDir() string { return filepath.Join(u.userDir(), "publishers") }
+// ---------- 系统级适配器存储 ----------
 
-func (u *UserApp) publisherPath(id string) string {
-	return filepath.Join(u.publishersDir(), id+".js")
+func (a *App) publishersDir() string { return filepath.Join(a.VarDir, "publishers") }
+
+func (a *App) publishersRegistryPath() string { return filepath.Join(a.VarDir, "publishers.json") }
+
+func (a *App) publisherPath(id string) string {
+	return filepath.Join(a.publishersDir(), id+".js")
 }
 
-// Publishers 当前用户已安装的适配器配置列表。
-func (u *UserApp) Publishers() []PublisherConfig {
-	u.mu.RLock()
-	defer u.mu.RUnlock()
-	out := make([]PublisherConfig, len(u.cfg.Publishers))
-	copy(out, u.cfg.Publishers)
-	return out
+// PublisherRegistry 已安装适配器清单（系统级，全体账号共享）。
+func (a *App) PublisherRegistry() []PublisherMeta {
+	data, err := os.ReadFile(a.publishersRegistryPath())
+	if err != nil {
+		return []PublisherMeta{}
+	}
+	var list []PublisherMeta
+	if json.Unmarshal(data, &list) != nil {
+		return []PublisherMeta{}
+	}
+	return list
 }
 
-// setPublisher 新增或更新适配器配置并持久化（保留原有密钥配置）。
-func (u *UserApp) setPublisher(p PublisherConfig) error {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	for i := range u.cfg.Publishers {
-		if u.cfg.Publishers[i].ID == p.ID {
-			if p.Config == nil {
-				p.Config = u.cfg.Publishers[i].Config // 未提交配置时保留原值
-			}
-			u.cfg.Publishers[i] = p
-			return u.saveConfig()
+func (a *App) savePublisherRegistry(list []PublisherMeta) error {
+	if err := os.MkdirAll(a.VarDir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(a.publishersRegistryPath(), data, 0o644)
+}
+
+// setPublisherMeta 新增或覆盖登记项。
+func (a *App) setPublisherMeta(m PublisherMeta) error {
+	list := a.PublisherRegistry()
+	for i := range list {
+		if list[i].ID == m.ID {
+			list[i] = m
+			return a.savePublisherRegistry(list)
 		}
 	}
-	if p.Config == nil {
-		p.Config = map[string]string{}
-	}
-	u.cfg.Publishers = append(u.cfg.Publishers, p)
-	return u.saveConfig()
+	list = append(list, m)
+	return a.savePublisherRegistry(list)
 }
 
-// setPublisherConfig 仅更新适配器的用户配置（密钥等）。
+// removePublisherMeta 删除登记项。
+func (a *App) removePublisherMeta(id string) error {
+	list := a.PublisherRegistry()
+	out := make([]PublisherMeta, 0, len(list))
+	for _, m := range list {
+		if m.ID != id {
+			out = append(out, m)
+		}
+	}
+	return a.savePublisherRegistry(out)
+}
+
+// adoptLegacyPublishers 1.2.x 把适配器装在各用户目录下；升级后统一迁到系统目录，
+// 保证「装一次全体可用」且旧账号的适配器不会凭空消失。
+func (a *App) adoptLegacyPublishers() {
+	matches, err := filepath.Glob(filepath.Join(a.VarDir, "users", "*", "publishers", "*.js"))
+	if err != nil || len(matches) == 0 {
+		return
+	}
+	if err := os.MkdirAll(a.publishersDir(), 0o755); err != nil {
+		return
+	}
+	for _, src := range matches {
+		data, err := os.ReadFile(src)
+		if err != nil {
+			continue
+		}
+		id, err := sanitizePublisherID(strings.TrimSuffix(filepath.Base(src), ".js"))
+		if err != nil {
+			continue
+		}
+		dst := a.publisherPath(id)
+		if _, err := os.Stat(dst); err == nil {
+			continue // 系统目录已有同名适配器，保留较新的那份
+		}
+		if err := os.WriteFile(dst, data, 0o644); err != nil {
+			continue
+		}
+		name, version := extractPublisherMeta(string(data))
+		if name == "" {
+			name = id
+		}
+		if version == "" {
+			version = "1.0.0"
+		}
+		_ = a.setPublisherMeta(PublisherMeta{ID: id, Name: name, Version: version})
+	}
+}
+
+// ---------- 用户级配置 ----------
+
+// PublishEnabled 当前用户是否启用发布功能（未设置时默认开启）。
+func (u *UserApp) PublishEnabled() bool {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return u.cfg.PublishEnabled == nil || *u.cfg.PublishEnabled
+}
+
+func (u *UserApp) setPublishEnabled(v bool) error {
+	u.mu.Lock()
+	u.cfg.PublishEnabled = &v
+	err := u.saveConfig()
+	u.mu.Unlock()
+	return err
+}
+
+// publisherCfg 取当前用户保存的适配器配置。
+func (u *UserApp) publisherCfg(id string) map[string]string {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	for _, p := range u.cfg.Publishers {
+		if p.ID == id {
+			out := make(map[string]string, len(p.Config))
+			for k, v := range p.Config {
+				out[k] = v
+			}
+			return out
+		}
+	}
+	return map[string]string{}
+}
+
+// setPublisherConfig 保存当前用户的适配器配置（按适配器 ID 覆盖）。
 func (u *UserApp) setPublisherConfig(id string, cfg map[string]string) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	for i := range u.cfg.Publishers {
 		if u.cfg.Publishers[i].ID == id {
-			u.cfg.Publishers[i].Config = cfg
+			u.cfg.Publishers[i] = PublisherConfig{ID: id, Config: cfg}
 			return u.saveConfig()
 		}
 	}
-	return fmt.Errorf("适配器未安装")
+	u.cfg.Publishers = append(u.cfg.Publishers, PublisherConfig{ID: id, Config: cfg})
+	return u.saveConfig()
 }
 
-// removePublisher 卸载适配器：删除文件与配置。
-func (u *UserApp) removePublisher(id string) error {
+// dropPublisherConfig 删除当前用户的适配器配置（适配器被卸载后清理）。
+func (u *UserApp) dropPublisherConfig(id string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	idx := -1
-	for i := range u.cfg.Publishers {
-		if u.cfg.Publishers[i].ID == id {
-			idx = i
-			break
+	out := make([]PublisherConfig, 0, len(u.cfg.Publishers))
+	changed := false
+	for _, p := range u.cfg.Publishers {
+		if p.ID == id {
+			changed = true
+			continue
 		}
+		out = append(out, p)
 	}
-	if idx < 0 {
-		return fmt.Errorf("适配器未安装")
+	if changed {
+		u.cfg.Publishers = out
+		_ = u.saveConfig()
 	}
-	if err := os.Remove(u.publisherPath(id)); err != nil && !os.IsNotExist(err) {
+}
+
+// uninstallPublisher 系统级卸载：删文件、删登记、清各账号的配置。
+func (a *App) uninstallPublisher(id string) error {
+	if err := os.Remove(a.publisherPath(id)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	u.cfg.Publishers = append(u.cfg.Publishers[:idx], u.cfg.Publishers[idx+1:]...)
-	return u.saveConfig()
+	if err := a.removePublisherMeta(id); err != nil {
+		return err
+	}
+	a.usersMu.RLock()
+	users := make([]*UserApp, 0, len(a.users))
+	for _, ua := range a.users {
+		users = append(users, ua)
+	}
+	a.usersMu.RUnlock()
+	for _, ua := range users {
+		ua.dropPublisherConfig(id)
+	}
+	return nil
 }
 
 // validateConfigMap 校验用户提交的适配器配置：键名安全、体积封顶。
@@ -242,42 +374,61 @@ func extractPublisherMeta(content string) (name, version string) {
 	return name, version
 }
 
-// handlePublishers GET /api/publishers（已安装 + 可下载清单）。
+// installedPublishers 汇总已安装适配器（系统登记 + 当前用户配置 + 文件存在性）。
+func (a *App) installedPublishers(ua *UserApp) []InstalledPublisher {
+	reg := a.PublisherRegistry()
+	out := make([]InstalledPublisher, 0, len(reg))
+	for _, m := range reg {
+		_, err := os.Stat(a.publisherPath(m.ID))
+		out = append(out, InstalledPublisher{
+			PublisherMeta: m,
+			Config:        ua.publisherCfg(m.ID),
+			Missing:       os.IsNotExist(err),
+		})
+	}
+	return out
+}
+
+// handlePublishers GET /api/publishers（已安装 + 可下载清单，后者仅管理员可见）
+// POST（安装，仅管理员）。
 func (a *App) handlePublishers(w http.ResponseWriter, r *http.Request) {
 	ua := userFromCtx(r)
 	if ua == nil {
 		writeErr(w, http.StatusUnauthorized, "未识别用户")
 		return
 	}
+	admin := ua.isAdmin()
 	switch r.Method {
 	case http.MethodGet:
 		resp := PublishersResponse{
-			Installed: []InstalledPublisher{},
+			Installed: a.installedPublishers(ua),
 			Available: []AvailablePublisher{},
+			Enabled:   ua.PublishEnabled(),
+			IsAdmin:   admin,
 		}
-		for _, p := range ua.Publishers() {
-			_, err := os.Stat(ua.publisherPath(p.ID))
-			resp.Installed = append(resp.Installed, InstalledPublisher{
-				PublisherConfig: p,
-				Missing:         os.IsNotExist(err),
-			})
-		}
-		content, err := fetchWithProxy(publishersIndexURL)
-		if err != nil {
-			if strings.Contains(err.Error(), "HTTP 404") {
-				resp.Error = "仓库尚未发布适配器清单（latest 分支上还没有 publishers/index.js）"
+		// 非管理员不需要（也不应触发）GitHub 请求：他们无法安装
+		if admin {
+			content, err := fetchWithProxy(publishersIndexURL)
+			if err != nil {
+				if strings.Contains(err.Error(), "HTTP 404") {
+					resp.Error = "仓库尚未发布适配器清单（main 分支上还没有 publishers/index.js）"
+				} else {
+					resp.Error = fmt.Sprintf("获取适配器清单失败：%v", err)
+				}
+			} else if list, perr := parsePublishersIndex(content); perr != nil {
+				resp.Error = fmt.Sprintf("适配器清单无效：%v", perr)
 			} else {
-				resp.Error = fmt.Sprintf("获取适配器清单失败：%v", err)
+				resp.Available = list
 			}
-		} else if list, perr := parsePublishersIndex(content); perr != nil {
-			resp.Error = fmt.Sprintf("适配器清单无效：%v", perr)
-		} else {
-			resp.Available = list
 		}
 		writeJSON(w, http.StatusOK, resp)
 
 	case http.MethodPost:
-		// 安装适配器：下载仓库文件 → 校验 → 落盘 → 登记配置
+		if !admin {
+			writeErr(w, http.StatusForbidden, "仅管理员可安装发布适配器")
+			return
+		}
+		// 安装适配器：下载仓库文件 → 校验 → 落盘 → 登记
 		var body struct {
 			ID   string `json:"id"`
 			Name string `json:"name"` // 清单元数据（前端传来，省一次清单拉取）
@@ -320,20 +471,22 @@ func (a *App) handlePublishers(w http.ResponseWriter, r *http.Request) {
 		if version == "" {
 			version = "1.0.0"
 		}
-		if err := os.MkdirAll(ua.publishersDir(), 0o755); err != nil {
+		a.publishersMu.Lock()
+		defer a.publishersMu.Unlock()
+		if err := os.MkdirAll(a.publishersDir(), 0o755); err != nil {
 			writeErr(w, http.StatusInternalServerError, "无法创建适配器目录")
 			return
 		}
-		if err := os.WriteFile(ua.publisherPath(id), []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(a.publisherPath(id), []byte(content), 0o644); err != nil {
 			writeErr(w, http.StatusInternalServerError, "保存适配器失败")
 			return
 		}
-		p := PublisherConfig{ID: id, Name: name, Desc: strings.TrimSpace(body.Desc), Version: version}
-		if err := ua.setPublisher(p); err != nil {
+		meta := PublisherMeta{ID: id, Name: name, Desc: strings.TrimSpace(body.Desc), Version: version}
+		if err := a.setPublisherMeta(meta); err != nil {
 			writeErr(w, http.StatusInternalServerError, "登记适配器失败")
 			return
 		}
-		writeJSON(w, http.StatusOK, p)
+		writeJSON(w, http.StatusOK, meta)
 
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "方法不允许")
@@ -341,7 +494,7 @@ func (a *App) handlePublishers(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePublisherItem GET /api/publishers/{id}（元数据）/ {id}/source（源码，供前端 <script> 加载）
-// PUT（保存配置）/ DELETE（卸载）。
+// PUT（保存当前用户的配置）/ DELETE（卸载，仅管理员）。
 func (a *App) handlePublisherItem(w http.ResponseWriter, r *http.Request) {
 	ua := userFromCtx(r)
 	if ua == nil {
@@ -355,9 +508,9 @@ func (a *App) handlePublisherItem(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		data, err := os.ReadFile(ua.publisherPath(id))
+		data, err := os.ReadFile(a.publisherPath(id))
 		if err != nil {
-			writeErr(w, http.StatusNotFound, "适配器文件不存在，请重新下载")
+			writeErr(w, http.StatusNotFound, "适配器文件不存在，请管理员重新下载")
 			return
 		}
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
@@ -372,13 +525,9 @@ func (a *App) handlePublisherItem(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		for _, p := range ua.Publishers() {
+		for _, p := range a.installedPublishers(ua) {
 			if p.ID == id {
-				_, statErr := os.Stat(ua.publisherPath(id))
-				writeJSON(w, http.StatusOK, InstalledPublisher{
-					PublisherConfig: p,
-					Missing:         os.IsNotExist(statErr),
-				})
+				writeJSON(w, http.StatusOK, p)
 				return
 			}
 		}
@@ -397,15 +546,33 @@ func (a *App) handlePublisherItem(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		found := false
+		for _, p := range a.installedPublishers(ua) {
+			if p.ID == id && !p.Missing {
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeErr(w, http.StatusBadRequest, "适配器未安装")
+			return
+		}
 		if err := ua.setPublisherConfig(id, cfg); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
+			writeErr(w, http.StatusInternalServerError, "保存配置失败")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 
 	case http.MethodDelete:
-		if err := ua.removePublisher(id); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
+		if !ua.isAdmin() {
+			writeErr(w, http.StatusForbidden, "仅管理员可卸载发布适配器")
+			return
+		}
+		a.publishersMu.Lock()
+		err := a.uninstallPublisher(id)
+		a.publishersMu.Unlock()
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

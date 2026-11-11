@@ -143,6 +143,33 @@ async function loadCustomTheme() {
   }
 }
 
+/* ---------------- 图床预连接 ---------------- */
+
+// 启用图床时提前与 Cloudinary 建连：图片实际由 res.cloudinary.com 提供，
+// api.cloudinary.com 负责上传。预连接可省掉首图的 DNS + TLS 握手时间。
+// 关闭图床时移除，避免给不用图床的用户白占连接。
+function preconnectCloudinary(on) {
+  const ids = ['wf-pre-res', 'wf-pre-api', 'wf-dns-cloud'];
+  if (!on) {
+    ids.forEach((id) => { const n = document.getElementById(id); if (n) n.remove(); });
+    return;
+  }
+  if (document.getElementById('wf-pre-res')) return;
+  const add = (id, rel, href, cross = false) => {
+    const l = document.createElement('link');
+    l.id = id;
+    l.rel = rel;
+    l.href = href;
+    if (cross) l.crossOrigin = '';
+    document.head.appendChild(l);
+  };
+  add('wf-pre-res', 'preconnect', 'https://res.cloudinary.com', true);
+  add('wf-pre-api', 'preconnect', 'https://api.cloudinary.com', true);
+  add('wf-dns-cloud', 'dns-prefetch', 'https://cloudinary.com');
+}
+
+/* ---------------- 上下文 ---------------- */
+
 const ctx = {
   state: null,
   params: {},
@@ -168,6 +195,13 @@ const ctx = {
   },
 
   refresh() { route(); },
+
+  // 静默同步地址栏（不触发 hashchange / 不重渲染）。
+  // 编辑器保存后标题变化会换文件名与 ID，用它避免整页重挂载带来的加载闪烁。
+  syncHash(hash) {
+    lastHash = hash;
+    history.replaceState(null, '', location.pathname + location.search + hash);
+  },
 
   // 打开系统「打开方式」传进来的外部文件（文件关联入口带 ?path=）
   openExternal(path) {
@@ -311,6 +345,7 @@ async function boot() {
     const saved = localStorage.getItem('wf-theme');
     if (saved) document.documentElement.dataset.theme = saved;
   }
+  preconnectCloudinary(!!ctx.state?.cloudinary?.enabled);
   await loadCustomTheme();
 
   // 系统深浅色变化时，重算依赖当前模式的外观（淡色背景 / 自定义强调色）

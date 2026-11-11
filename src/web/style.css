@@ -1391,3 +1391,95 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
   background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-sm);
 }
 .gh-url { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------------- 图片库：多选 / 灯箱 ---------------- */
+
+.toolbar .btn-ghost.on { border-color: var(--accent); color: var(--accent-ink); background: var(--accent-soft); }
+.selbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 14px; padding: 9px 12px;
+  border: 1px solid var(--accent-line); border-radius: var(--r-lg);
+  background: var(--accent-soft);
+}
+.selbar[hidden] { display: none; }
+.selbar-count { font-size: 12.5px; font-weight: 600; color: var(--accent-ink); }
+.selbar .btn:disabled { opacity: .45; pointer-events: none; }
+.image-check {
+  position: absolute; top: 8px; right: 8px; z-index: 2;
+  width: 21px; height: 21px; border-radius: 7px;
+  display: grid; place-items: center; cursor: pointer;
+  border: 1.5px solid rgba(255, 255, 255, .92);
+  background: rgba(17, 17, 17, .34);
+  opacity: 0; transition: opacity .16s var(--ease), background .16s var(--ease);
+}
+.image-cell:hover .image-check { opacity: 1; }
+.image-cell.is-selected .image-check { opacity: 1; background: var(--accent); border-color: var(--accent); }
+.image-check-box { color: #fff; display: grid; place-items: center; opacity: 0; transition: opacity .16s var(--ease); }
+.image-cell.is-selected .image-check-box { opacity: 1; }
+.image-cell.is-selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.image-cell .veil .row button { display: flex; align-items: center; justify-content: center; gap: 4px; }
+
+/* 灯箱压在页面之上、提示与弹窗之下：删除确认框必须能盖在灯箱上操作 */
+.img-viewer {
+  position: fixed; inset: 0; z-index: 85;
+  display: flex; flex-direction: column;
+  background: rgba(12, 12, 12, .88);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+}
+.img-viewer-stage { flex: 1; min-height: 0; position: relative; display: grid; place-items: center; padding: 26px; }
+.img-viewer-img {
+  max-width: 100%; max-height: 100%; object-fit: contain;
+  border-radius: 6px; box-shadow: 0 24px 70px rgba(0, 0, 0, .55);
+}
+.img-viewer-close,
+.img-viewer-nav {
+  position: absolute; z-index: 2;
+  display: grid; place-items: center; color: #fff;
+  background: rgba(255, 255, 255, .14); border-radius: 99px;
+  transition: background .16s var(--ease);
+}
+.img-viewer-close { top: 16px; right: 18px; width: 34px; height: 34px; }
+.img-viewer-nav { top: 50%; transform: translateY(-50%); width: 40px; height: 40px; }
+.img-viewer-nav.prev { left: 14px; }
+.img-viewer-nav.next { right: 14px; }
+.img-viewer-close:hover, .img-viewer-nav:hover { background: rgba(255, 255, 255, .3); }
+.img-viewer-bar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 12px 20px; color: #fff;
+  background: rgba(10, 10, 10, .8); border-top: 1px solid rgba(255, 255, 255, .1);
+}
+.img-viewer-meta { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.img-viewer-meta b { font-size: 13px; max-width: 52vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.img-viewer-meta .dim { font-size: 11.5px; font-family: var(--mono); color: rgba(255, 255, 255, .62); }
+.img-viewer-ops { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.img-viewer .btn-ghost { color: #fff; border-color: rgba(255, 255, 255, .26); background: rgba(255, 255, 255, .07); }
+.img-viewer .btn-ghost:hover { background: rgba(255, 255, 255, .18); color: #fff; }
+
+/* 编辑器标题栏右侧的操作组：发布与保存同行 */
+.head-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+
+/* ---------------- 发布：复制/统一发布 ---------------- */
+
+.pub-actions-row { display: flex; gap: 9px; flex-wrap: wrap; }
+.pub-img-tag {
+  flex: none; padding: 2px 7px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+  background: var(--accent-soft); color: var(--accent-ink);
+}
+.pub-img-tag.is-local { background: var(--surface-3); color: var(--ink-3); }
+.pub-results { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.pub-result {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--surface-2); font-size: 12.5px;
+}
+.pub-result b { flex: none; }
+.pub-result-msg { min-width: 0; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; }
+.pub-result-msg a { color: inherit; text-decoration: underline; }
+.pub-result-dot { flex: none; width: 8px; height: 8px; border-radius: 99px; background: var(--ink-3); }
+.pub-result.is-busy .pub-result-dot { background: var(--accent); animation: pub-pulse 1s var(--ease) infinite; }
+.pub-result.is-ok .pub-result-dot { background: var(--ok); }
+.pub-result.is-err .pub-result-dot { background: var(--err); }
+.pub-result.is-err .pub-result-msg { color: var(--err); }
+@keyframes pub-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.pub-card input[type="checkbox"] { flex: none; accent-color: var(--accent); width: 15px; height: 15px; }
