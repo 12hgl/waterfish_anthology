@@ -32,7 +32,7 @@ const FONT_STACKS = {
 };
 
 // 当前生效的内置主题；自定义主题（theme 不在内置表）时以「纸墨」为基底，
-// 具体样式由上传的 JS 脚本覆盖，保证同一主题在任何时候表现一致。
+// 具体样式由主题声明覆盖，保证同一主题在任何时候表现一致。
 function themeOf(ap) {
   const id = ap && ap.theme;
   return THEMES.find((t) => t.id === id) || THEMES[0];
@@ -62,7 +62,7 @@ function isDarkNow() {
 }
 
 // applyAppearance 把外观配置应用到页面（深浅色 / 内置主题打包 / 背景）。
-// 自定义主题脚本由 loadCustomTheme 单独加载执行，覆盖在内置外观之上。
+// 自定义主题声明由 applyCustomTheme 单独叠加，覆盖在内置外观之上。
 function applyAppearance(ap) {
   ap = ap || {};
   const root = document.documentElement;
@@ -83,8 +83,8 @@ function applyAppearance(ap) {
   if (th.id !== 'default') root.dataset.preset = th.id;
   else delete root.dataset.preset;
 
-  // 字体
-  document.body.style.fontFamily = FONT_STACKS[th.font] || '';
+  // 字体（用变量承载，方便自定义主题在同一层覆盖）
+  st.setProperty('--app-font', FONT_STACKS[th.font] || 'var(--sans)');
 
   // 字号缩放（作用于整体外壳，弹窗不受影响）
   if (shell) shell.style.zoom = th.scale && th.scale !== 100 ? th.scale + '%' : '';
@@ -100,47 +100,132 @@ function applyAppearance(ap) {
   }
 }
 
-// 自定义主题脚本：从服务端拉取当前用户的 theme.js 并在页面主世界执行。
-// 执行前快照全部行内 CSS 变量，移除 / 替换主题时恢复旧值并删除新增值，
-// 因此脚本无论新增变量还是覆盖 --accent 等既有变量，都不会残留到下一主题。
-let themeBaseVars = null;
-let themeLoadSeq = 0;
+/* ---------------- 自定义主题：一行一条的声明 ----------------
+   主色: #1F6C9F
+   副色: #B45309
+   背景: https://example.com/bg.jpg
+   字体: 宋体
+   不再执行任意脚本：只解析键值并落到 CSS 变量，
+   既避免脚本注入，也让主题文件一眼能看懂、几秒能改完。 */
+
+const SPEC_ALIASES = {
+  主色: 'accent', accent: 'accent', 强调色: 'accent',
+  副色: 'accent2', accent2: 'accent2', 次色: 'accent2', secondary: 'accent2',
+  背景: 'bg', bg: 'bg', background: 'bg',
+  字体: 'font', font: 'font',
+  文字: 'ink', ink: 'ink', 文字色: 'ink', text: 'ink',
+  底色: 'paper', paper: 'paper', 纸面: 'paper',
+  圆角: 'radius', radius: 'radius',
+};
+
+const COLOR_RE = /^(#[0-9a-f]{3,8}|rgba?\([^()]*\)|hsla?\([^()]*\)|[a-z]{3,20})$/i;
+const FONT_RE = /^[\w\u4e00-\u9fa5 "'\-,.]{1,80}$/;
+
+// 自定义主题会碰的变量：清理时按这份清单回退，不留残影
+const SPEC_VARS = [
+  '--accent', '--accent-ink', '--accent-soft', '--accent-line', '--accent-2',
+  '--app-font', '--theme-bg', '--ink', '--paper', '--r', '--r-lg',
+];
 
 function clearCustomTheme() {
-  const style = document.documentElement.style;
-  if (themeBaseVars) {
-    [...style].filter((p) => p.startsWith('--') && !themeBaseVars.has(p))
-      .forEach((p) => style.removeProperty(p));
-    themeBaseVars.forEach((v, p) => style.setProperty(p, v.value, v.priority));
-  }
-  themeBaseVars = null;
+  const st = document.documentElement.style;
+  SPEC_VARS.forEach((p) => st.removeProperty(p));
 }
 
-async function loadCustomTheme() {
-  const seq = ++themeLoadSeq;
-  clearCustomTheme();
+// parseThemeSpec 解析「一行一条」的主题声明。
+// 支持 "键: 值"、"键 = 值"、"键 值" 三种写法；// 与 # 开头为注释。
+function parseThemeSpec(text) {
+  const spec = {};
+  const invalid = [];
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    let line = raw.trim();
+    if (!line || line.startsWith('//') || line.startsWith('#')) continue;
+    line = line.replace(/\s+\/\/.*$/, '').trim();
+    const m = /^([^:=]+?)\s*[:=]\s*(.+)$/.exec(line) || /^(\S+)\s+(.+)$/.exec(line);
+    if (!m) { invalid.push(raw.trim()); continue; }
+    const key = SPEC_ALIASES[m[1].trim().toLowerCase()] || SPEC_ALIASES[m[1].trim()];
+    if (!key) { invalid.push(raw.trim()); continue; }
+    let val = m[2].trim().replace(/^["']|["';]$/g, '').trim();
+    if (!val) continue;
 
-  let js = '';
-  try {
-    const res = await fetch('api/theme.js', { cache: 'no-store' });
-    if (res.status === 204) return;
-    if (!res.ok) throw new Error(String(res.status));
-    js = (await res.text()).trim();
-  } catch { return; }
-  if (!js || seq !== themeLoadSeq) return;
-
-  const style = document.documentElement.style;
-  themeBaseVars = new Map([...style].filter((p) => p.startsWith('--')).map((p) => [p, {
-    value: style.getPropertyValue(p),
-    priority: style.getPropertyPriority(p),
-  }]));
-  try {
-    // new Function 在当前页面主世界执行，并能可靠捕获同步脚本异常。
-    new Function(js)();
-  } catch (e) {
-    clearCustomTheme();
-    ui.toast('自定义主题执行失败', String(e.message || e).slice(0, 120), 'err', 6000);
+    if (key === 'accent' || key === 'accent2' || key === 'ink' || key === 'paper') {
+      if (!COLOR_RE.test(val)) { invalid.push(raw.trim()); continue; }
+    } else if (key === 'bg') {
+      if (!/^https?:\/\/\S+$/i.test(val) && !COLOR_RE.test(val)) { invalid.push(raw.trim()); continue; }
+    } else if (key === 'font') {
+      if (!FONT_RE.test(val)) { invalid.push(raw.trim()); continue; }
+    } else if (key === 'radius') {
+      const n = parseInt(val, 10);
+      if (!Number.isFinite(n) || n < 0 || n > 40) { invalid.push(raw.trim()); continue; }
+      val = n;
+    }
+    spec[key] = val;
   }
+  return { spec, invalid };
+}
+
+const isUrl = (v) => /^https?:\/\//i.test(v || '');
+
+// applyThemeSpec 把解析结果落到 CSS 变量。
+function applyThemeSpec(spec) {
+  const st = document.documentElement.style;
+  const dark = isDarkNow();
+  const paperBase = dark ? '#0E0E0D' : '#FAFAF9';
+
+  if (spec.accent) {
+    const rgb = hexToRgb(spec.accent);
+    st.setProperty('--accent', spec.accent);
+    st.setProperty('--accent-ink', dark && rgb ? mix(spec.accent, '#FFFFFF', 0.28) : spec.accent);
+    if (rgb) {
+      st.setProperty('--accent-soft',
+        dark ? `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, .16)` : mix(spec.accent, '#FFFFFF', 0.88));
+      st.setProperty('--accent-line',
+        dark ? `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, .38)` : mix(spec.accent, '#FFFFFF', 0.66));
+    }
+  }
+
+  // 副色：次级强调（子菜单高亮条）+ 页面底色的淡彩
+  if (spec.accent2) {
+    st.setProperty('--accent-2', spec.accent2);
+    if (!spec.paper) st.setProperty('--paper', mix(paperBase, spec.accent2, dark ? 0.09 : 0.055));
+  }
+
+  if (spec.paper) st.setProperty('--paper', spec.paper);
+  if (spec.ink) st.setProperty('--ink', spec.ink);
+
+  if (spec.font) {
+    const stack = spec.font in FONT_STACKS
+      ? (FONT_STACKS[spec.font] || 'var(--sans)')
+      : `"${spec.font}", var(--sans)`;
+    st.setProperty('--app-font', stack);
+  }
+
+  if (spec.bg) {
+    if (isUrl(spec.bg)) st.setProperty('--theme-bg', `url("${spec.bg.replace(/["\\]/g, '')}")`);
+    else st.setProperty('--paper', spec.bg); // 背景填颜色也支持
+  }
+
+  if (spec.radius != null) {
+    st.setProperty('--r', `${spec.radius}px`);
+    st.setProperty('--r-lg', `${spec.radius + 4}px`);
+  }
+}
+
+// applyCustomTheme 取当前选中的自定义主题并应用；返回 { spec, invalid } 供界面提示。
+function applyCustomTheme(ap) {
+  const cfg = ap || {};
+  const t = (cfg.themes || []).find((x) => x.name === cfg.theme);
+  if (!t) return null;
+  const parsed = parseThemeSpec(t.js);
+  applyThemeSpec(parsed.spec);
+  return parsed;
+}
+
+// 统一入口：先回到内置外观，再叠加自定义主题声明
+function applyAppearanceAll(ap) {
+  clearCustomTheme();
+  applyAppearance(ap);
+  return applyCustomTheme(ap);
 }
 
 /* ---------------- 图床预连接 ---------------- */
@@ -220,7 +305,7 @@ const ctx = {
     });
   },
 
-  // 保存外观配置（分段保存，立即应用）
+  // 保存外观配置（分段保存，成功后立即应用）
   async saveAppearance(patch) {
     const next = { ...(ctx.state?.appearance || {}), ...patch };
     try {
@@ -228,15 +313,27 @@ const ctx = {
       const applied = saved.appearance || next;
       ctx.state = ctx.state || {};
       ctx.state.appearance = applied;
-      // 先恢复上一套自定义主题覆盖的变量，再应用新的内置基底。
-      clearCustomTheme();
-      applyAppearance(applied);
-      // 主题脚本始终后置于内置外观执行，保持「自定义主题优先」语义
-      await loadCustomTheme();
+      applyAppearanceAll(applied);
+      return applied;
     } catch (e) {
       ui.toast('外观保存失败', e.message, 'err', 5000);
       throw e;
     }
+  },
+
+  // 只预览不保存（设置页「保存」前的试穿）
+  previewAppearance(ap) {
+    return applyAppearanceAll(ap);
+  },
+
+  // 恢复到已保存的外观
+  revertAppearance() {
+    return applyAppearanceAll(ctx.state?.appearance || {});
+  },
+
+  // 图床开关保存后同步预连接
+  syncCloudinary(on) {
+    preconnectCloudinary(!!on);
   },
 
   // 切换深浅色（保留其余外观配置）
@@ -272,6 +369,9 @@ async function route() {
   if (rendering) return;
   rendering = true;
   const host = document.getElementById('view');
+  // 各视图的浮动层（设置页的保存条 / 外观抽屉）随路由切换整体清理
+  const dock = document.getElementById('dockHost');
+  if (dock) dock.innerHTML = '';
   host.scrollTop = 0;
   document.getElementById('content').scrollTop = 0;
   try {
@@ -340,17 +440,16 @@ async function boot() {
 
   await ctx.refreshState();
   // 外观：优先用账号级配置；接口不可用时退回 localStorage 里的本地选择
-  if (ctx.state?.appearance) applyAppearance(ctx.state.appearance);
+  if (ctx.state?.appearance) applyAppearanceAll(ctx.state.appearance);
   else {
     const saved = localStorage.getItem('wf-theme');
     if (saved) document.documentElement.dataset.theme = saved;
   }
   preconnectCloudinary(!!ctx.state?.cloudinary?.enabled);
-  await loadCustomTheme();
 
   // 系统深浅色变化时，重算依赖当前模式的外观（淡色背景 / 自定义强调色）
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-    if (ctx.state?.appearance) applyAppearance(ctx.state.appearance);
+    if (ctx.state?.appearance) applyAppearanceAll(ctx.state.appearance);
   });
 
   window.addEventListener('hashchange', onHashChange);

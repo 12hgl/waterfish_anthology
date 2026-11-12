@@ -123,11 +123,25 @@ html, body {
 body {
   background: var(--paper);
   color: var(--ink);
-  font-family: var(--sans);
+  font-family: var(--app-font, var(--sans));
   font-size: 14px;
   line-height: 1.65;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* 自定义主题的背景图：铺在纸色之上、内容之下，并压一层纸色保证可读 */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: var(--theme-bg, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: .42;
+  pointer-events: none;
 }
 
 button, input, textarea, select { font: inherit; color: inherit; }
@@ -783,7 +797,7 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .toasts {
   position: fixed;
   right: 22px;
-  bottom: 22px;
+  bottom: 84px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -984,7 +998,15 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
   font-family: inherit;
 }
 .subnav-item:hover { color: var(--ink); }
-.subnav-item.is-active { color: var(--accent-ink); border-bottom-color: var(--accent); font-weight: 600; }
+.subnav-item.is-active {
+  color: var(--accent-ink);
+  font-weight: 600;
+  border-bottom-color: transparent;
+  background-image: linear-gradient(90deg, var(--accent), var(--accent-2, var(--accent)));
+  background-repeat: no-repeat;
+  background-size: 100% 2px;
+  background-position: 0 100%;
+}
 .subnav-item .tag { margin-left: 6px; }
 
 /* ---------- 外观控件 ---------- */
@@ -1483,3 +1505,110 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .pub-result.is-err .pub-result-msg { color: var(--err); }
 @keyframes pub-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .pub-card input[type="checkbox"] { flex: none; accent-color: var(--accent); width: 15px; height: 15px; }
+
+/* ---------------- 设置：右下角保存条 / 用户卡片 / 外观抽屉 ---------------- */
+
+.dock-host { position: relative; z-index: 70; }
+
+.settings-dock {
+  position: fixed; right: 22px; bottom: 20px; z-index: 80;
+  display: flex; align-items: center; gap: 10px;
+  max-width: calc(100vw - 24px);
+}
+
+.save-bar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px 6px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow-pop);
+  animation: dockIn .22s var(--ease-out);
+}
+.save-bar[hidden] { display: none; }
+.save-bar-text { font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
+
+.dock-btn {
+  width: 32px; height: 32px; flex: none;
+  border-radius: 999px; display: grid; place-items: center;
+  transition: background .16s var(--ease), color .16s var(--ease), transform .16s var(--ease);
+}
+.dock-btn:hover { transform: translateY(-1px); }
+.dock-btn:active { transform: none; }
+.dock-btn:disabled { opacity: .5; pointer-events: none; }
+.dock-btn.ok { background: var(--accent); color: #fff; }
+.dock-btn.ok:hover { background: var(--accent-ink); }
+.dock-btn.cancel { background: var(--surface-3); color: var(--ink-2); }
+.dock-btn.cancel:hover { background: var(--line-strong); color: var(--ink); }
+
+.user-chip {
+  display: flex; align-items: center; gap: 9px;
+  padding: 5px 12px 5px 5px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow-card);
+  transition: border-color .16s var(--ease), box-shadow .16s var(--ease), transform .16s var(--ease);
+}
+.user-chip:hover { border-color: var(--line-strong); box-shadow: var(--shadow-pop); transform: translateY(-1px); }
+.user-chip.is-open { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.user-chip-name {
+  font-size: 13px; font-weight: 600; max-width: 132px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.user-chip-palette { color: var(--ink-3); display: grid; place-items: center; transition: color .16s var(--ease); }
+.user-chip:hover .user-chip-palette, .user-chip.is-open .user-chip-palette { color: var(--accent); }
+.user-chip[hidden] { display: none; }
+
+.avatar {
+  width: 28px; height: 28px; flex: none;
+  border-radius: 999px; display: grid; place-items: center;
+  font-size: 12px; font-weight: 700; letter-spacing: .02em;
+  color: #fff; user-select: none;
+  background: linear-gradient(140deg, var(--accent), var(--accent-2, var(--accent)));
+}
+
+@keyframes dockIn { from { opacity: 0; transform: translateY(8px); } }
+
+/* 外观抽屉 */
+.ap-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 75;
+  width: min(430px, 100vw);
+  display: flex; flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  box-shadow: -30px 0 70px -34px rgba(0, 0, 0, .42);
+  transform: translateX(102%);
+  visibility: hidden;
+  transition: transform .26s var(--ease-out), visibility .26s step-end;
+}
+.ap-drawer.open { transform: none; visibility: visible; transition: transform .26s var(--ease-out); }
+.ap-drawer-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 16px 16px 14px; border-bottom: 1px solid var(--line);
+}
+.ap-drawer-user { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ap-drawer-user b { display: block; font-size: 14px; line-height: 1.35; }
+.ap-drawer-user span { font-size: 11.5px; color: var(--ink-3); }
+.ap-drawer-close { margin-left: auto; color: var(--ink-3); }
+.ap-drawer-close:hover { color: var(--ink); }
+.ap-drawer-body { flex: 1; min-height: 0; overflow: auto; padding: 18px 16px 96px; }
+.ap-drawer-body .theme-grid { grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; }
+.ap-hint { font-size: 12px; color: var(--ink-3); line-height: 1.7; }
+.ap-hint code { font-family: var(--mono); font-size: 11.5px; background: var(--surface-3); padding: .12em .35em; border-radius: 4px; }
+
+@media (max-width: 720px) {
+  .settings-dock { right: 12px; bottom: 12px; gap: 8px; }
+  .save-bar-text { display: none; }
+  .save-bar { padding: 5px; }
+  .user-chip-name { max-width: 84px; }
+}
+
+.ap-spec {
+  margin: 0; padding: 10px 12px;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.9;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: var(--r);
+  white-space: pre-wrap; word-break: break-word;
+}

@@ -107,7 +107,6 @@ func (a *App) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/settings", a.handleSettings)
 	mux.HandleFunc("/api/settings/storage", a.handleSetStorage)
 	mux.HandleFunc("/api/settings/github", a.handleGitHubProxy)
-	mux.HandleFunc("/api/theme.js", a.handleThemeJS)
 	mux.HandleFunc("/api/browse", a.handleBrowse)
 
 	// 文章库

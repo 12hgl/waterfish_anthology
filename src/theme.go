@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"net/http"
 	"strings"
 	"unicode/utf8"
 )
@@ -142,32 +141,4 @@ func sanitizeAppearance(a AppearanceConfig) AppearanceConfig {
 		a.Theme = "default"
 	}
 	return a
-}
-
-// handleThemeJS 下发当前用户生效中的自定义主题脚本；未启用自定义主题时返回 204。
-func (a *App) handleThemeJS(w http.ResponseWriter, r *http.Request) {
-	ua := userFromCtx(r)
-	if ua == nil {
-		writeErr(w, http.StatusUnauthorized, "未识别到登录用户")
-		return
-	}
-	if r.Method != http.MethodGet {
-		writeErr(w, http.StatusMethodNotAllowed, "方法不允许")
-		return
-	}
-	ap := ua.Appearance()
-	js := ""
-	for _, t := range ap.Themes {
-		if t.Name == ap.Theme {
-			js = t.JS
-			break
-		}
-	}
-	if strings.TrimSpace(js) == "" {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = w.Write([]byte(js))
 }

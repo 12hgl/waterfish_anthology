@@ -14,7 +14,7 @@ import (
 )
 
 // Version 由构建脚本通过 -ldflags 注入。
-var Version = "1.2.2"
+var Version = "1.2.3"
 
 const (
 	dirPassage = "passage"

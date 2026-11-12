@@ -1,4 +1,8 @@
-/* 设置：账号 / 外观 / 管理员设置（图床 + 存储，仅管理员） / 更新与实验 / 关于 */
+/* 设置：发布设置 / 管理员设置（图床 + 存储 + GitHub 加速） / 更新 / 关于
+   账号与外观收进右下角的用户卡片，点开是外观抽屉。
+
+   保存模型：改动先落在草稿上，右下角出现「保存 / 取消」；
+   切换子菜单、开关抽屉都不会丢草稿，点保存才写服务端。 */
 
 import { api } from '../api.js';
 import * as ui from '../ui.js';
@@ -17,6 +21,16 @@ const THEMES = [
   { id: 'rose',    name: '玫红',   color: '#BE4B6B', font: '系统字体', scale: '100%', bg: '淡彩' },
 ];
 
+const SAMPLE_THEME = `// 一行写一项，只写想改的，其余的沿用内置外观
+主色: #1F6C9F
+副色: #B45309
+背景: https://example.com/bg.jpg
+字体: 宋体
+`;
+
+const clone = (v) => JSON.parse(JSON.stringify(v ?? null));
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
 function fmtBytes(n) {
   if (n < 1024) return n + ' B';
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
@@ -33,72 +47,42 @@ function uniqueThemeName(name, taken) {
 export async function render(el, ctx) {
   const st = ctx.state || await ctx.refreshState();
   const isAdmin = !!st.user?.isAdmin || st.user?.source === 'local';
-  const ap = st.appearance || {};
-  const publishOn = st.publishEnabled !== false;
+  const userName = st.user?.name || '未知';
+  const avatarText = [...userName][0] || '?';
+
+  /* ---------- 草稿 ---------- */
+  const base = {
+    appearance: clone(st.appearance || {}),
+    publishEnabled: st.publishEnabled !== false,
+    cloudinary: {
+      enabled: !!st.cloudinary?.enabled,
+      cloudName: st.cloudinary?.cloudName || '',
+      uploadPreset: st.cloudinary?.uploadPreset || '',
+    },
+  };
+  const draft = clone(base);
+  // GitHub 加速源按服务端下发的预设初始化，保存前也只改草稿
+  let ghBase = null;
+  let gh = null;
 
   el.innerHTML = `
     <div class="page-head">
       <div>
         <h1 class="page-title">设置</h1>
       </div>
+      <div class="spacer"></div>
+      <span class="hint" id="dirtyHint">改动后点右下角保存</span>
     </div>
 
     <div class="subnav" id="subnav">
-      <button class="subnav-item is-active" data-tab="account">账号</button>
-      <button class="subnav-item" data-tab="appearance">外观</button>
-      <button class="subnav-item" data-tab="publish">发布设置</button>
+      <button class="subnav-item is-active" data-tab="publish">发布设置</button>
       ${isAdmin ? '<button class="subnav-item" data-tab="admin">管理员设置</button>' : ''}
       <button class="subnav-item" data-tab="updates">更新</button>
       <button class="subnav-item" data-tab="about">关于</button>
     </div>
 
-    <!-- 账号 -->
-    <div class="card card-pad section" data-panel="account">
-      <dl class="kv">
-        <dt>登录账号</dt>
-        <dd style="display:flex;align-items:center;gap:8px">
-          <b>${ui.esc(st.user?.name || '未知')}</b>
-          ${isAdmin ? '<span class="tag tag-ok">管理员</span>' : '<span class="tag">成员</span>'}
-          ${st.user?.source === 'local' ? '<span class="tag tag-warn">局域网直连</span>' : ''}
-        </dd>
-        <dt>内容</dt>
-        <dd>${st.stats?.articles ?? 0} 篇文章 · ${st.stats?.localImages ?? 0} 张本地图片 · ${st.stats?.seoRecords ?? 0} 条 SEO 记录</dd>
-      </dl>
-    </div>
-
-    <!-- 外观 -->
-    <div data-panel="appearance" hidden>
-      <div class="card card-pad section">
-        <div class="ap-block">
-          <div class="ap-label">主题模式</div>
-          <div class="tabs" id="apMode">
-            <button class="tab" data-mode="auto">跟随系统</button>
-            <button class="tab" data-mode="light">浅色</button>
-            <button class="tab" data-mode="dark">深色</button>
-          </div>
-        </div>
-
-        <div style="margin-top:22px">
-          <div class="ap-label">主题</div>
-          <div class="theme-grid" id="apThemes"></div>
-        </div>
-
-        <div style="margin-top:22px">
-          <div class="ap-label">自定义主题</div>
-          <div class="ap-upload" id="apUpload"></div>
-        </div>
-
-        <div style="margin-top:18px">
-          <div class="ap-label">预览</div>
-          <div class="ap-preview">
-            正文示例：<b>粗体文字</b>、<span class="ap-link">链接样式</span>、<code style="font-family:var(--mono);font-size:12px;background:var(--surface-3);padding:.12em .4em;border-radius:4px">code</code>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- 发布设置（所有账号可用；装载插件仅管理员） -->
-    <div data-panel="publish" hidden>
+    <div data-panel="publish">
       <div class="card card-pad section">
         <div class="section-title">发布文章（Beta）</div>
         <div class="exp-row">
@@ -107,7 +91,7 @@ export async function render(el, ctx) {
             <p>开启后文章编辑页会显示「发布」按钮：可复制发布（有图床时图片自动转成直链），也可统一发布到已安装的平台。开关、密钥都按账号独立保存。</p>
           </div>
           <label class="switch" title="开启 / 关闭发布功能">
-            <input type="checkbox" id="pubToggle" ${publishOn ? 'checked' : ''}>
+            <input type="checkbox" id="pubToggle" ${draft.publishEnabled ? 'checked' : ''}>
             <span class="switch-track"></span>
           </label>
         </div>
@@ -130,7 +114,7 @@ export async function render(el, ctx) {
       </div>` : ''}
     </div>
 
-    <!-- 管理员设置：图床 + 存储路径（仅管理员可见） -->
+    <!-- 管理员设置：图床 + 存储路径 + GitHub 加速（仅管理员可见） -->
     ${isAdmin ? `
     <div data-panel="admin" hidden>
       <div class="card card-pad section">
@@ -139,31 +123,30 @@ export async function render(el, ctx) {
         <div class="field">
           <label>启用图床</label>
           <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:400">
-            <input type="checkbox" id="cloudOn" ${st.cloudinary.enabled ? 'checked' : ''} style="width:16px;height:16px;accent-color:var(--accent)">
-            <span id="cloudStateText">${st.cloudinary.enabled ? '已启用' : '未启用'}</span>
+            <input type="checkbox" id="cloudOn" ${draft.cloudinary.enabled ? 'checked' : ''} style="width:16px;height:16px;accent-color:var(--accent)">
+            <span id="cloudStateText">${draft.cloudinary.enabled ? '已启用' : '未启用'}</span>
           </label>
         </div>
 
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0 18px">
           <div class="field">
             <label for="cloudName">Cloud name</label>
-            <input class="input" id="cloudName" placeholder="如 dxxxxxx" value="${ui.esc(st.cloudinary.cloudName || '')}" spellcheck="false">
+            <input class="input" id="cloudName" placeholder="如 dxxxxxx" value="${ui.esc(draft.cloudinary.cloudName)}" spellcheck="false">
           </div>
           <div class="field">
             <label for="preset">Upload preset</label>
-            <input class="input" id="preset" placeholder="如 waterfish_unsigned" value="${ui.esc(st.cloudinary.uploadPreset || '')}" spellcheck="false">
+            <input class="input" id="preset" placeholder="如 waterfish_unsigned" value="${ui.esc(draft.cloudinary.uploadPreset)}" spellcheck="false">
           </div>
         </div>
 
-        <div class="field" style="margin-bottom:18px">
+        <div class="field" style="margin-bottom:0">
           <a class="tut-link" href="${TUTORIAL_URL}" target="_blank" rel="noopener noreferrer">${ui.icon('external', 14)}<span>获取教程：Cloudinary 上传凭证怎么拿</span></a>
         </div>
-
-        <button class="btn btn-primary" id="saveCloud">${ui.icon('save')}<span>保存图床设置</span></button>
       </div>
 
       <div class="card card-pad section">
         <div class="section-title">本地存储路径</div>
+        <p class="section-desc">切换路径会立即搬迁数据，不进入待保存队列。</p>
 
         <dl class="kv" style="margin-bottom:16px">
           <dt>当前路径</dt>
@@ -228,7 +211,6 @@ export async function render(el, ctx) {
         </div>
 
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
-          <button class="btn btn-primary" id="saveGhProxy">${ui.icon('save')}<span>保存加速设置</span></button>
           <button class="btn btn-ghost" id="testGhProxy">${ui.icon('refresh')}<span>测试线路</span></button>
           <span class="hint" id="ghStatus"></span>
         </div>
@@ -251,49 +233,131 @@ export async function render(el, ctx) {
       <dl class="kv">
         <dt>应用名称</dt><dd>水鱼文集</dd>
         <dt>当前版本</dt><dd>v${ui.esc(st.version)}</dd>
+        <dt>登录账号</dt><dd>${ui.esc(userName)}${isAdmin ? ' · 管理员' : ' · 成员'}${st.user?.source === 'local' ? ' · 局域网直连' : ''}</dd>
       </dl>
     </div>
+
+    <div style="height:56px" aria-hidden="true"></div>
   `;
 
   const $ = (s) => el.querySelector(s);
-  const cur = () => ctx.state?.appearance || {};
 
-  /* ---------- 主题卡片 + 自定义主题上传区（选择 / 上传 / 删除后原地更新） ---------- */
+  /* ---------- 右下角：保存条 + 用户卡片 + 外观抽屉 ---------- */
+  const dockHost = document.getElementById('dockHost');
+  dockHost.innerHTML = `
+    <aside class="ap-drawer" id="apDrawer" aria-label="外观设置">
+      <div class="ap-drawer-head">
+        <div class="ap-drawer-user">
+          <span class="avatar">${ui.esc(avatarText)}</span>
+          <div>
+            <b>${ui.esc(userName)}</b>
+            <span>${isAdmin ? '管理员' : '成员'} · ${st.stats?.articles ?? 0} 篇文章 · ${st.stats?.localImages ?? 0} 张图片</span>
+          </div>
+        </div>
+        <button class="icon-btn ap-drawer-close" id="apClose" title="关闭">${ui.icon('close', 16)}</button>
+      </div>
+      <div class="ap-drawer-body">
+        <div class="ap-block">
+          <div class="ap-label">主题模式</div>
+          <div class="tabs" id="apMode">
+            <button class="tab" data-mode="auto">跟随系统</button>
+            <button class="tab" data-mode="light">浅色</button>
+            <button class="tab" data-mode="dark">深色</button>
+          </div>
+        </div>
+
+        <div style="margin-top:20px">
+          <div class="ap-label">主题</div>
+          <div class="theme-grid" id="apThemes"></div>
+        </div>
+
+        <div style="margin-top:20px">
+          <div class="ap-label">自定义主题</div>
+          <div class="ap-upload" id="apUpload"></div>
+          <div class="ap-hint" style="margin-top:10px">
+            <p style="margin:0 0 8px">主题文件一行一条，只写想改的项，其余沿用内置外观。</p>
+            <pre class="ap-spec">主色: #1F6C9F
+副色: #B45309
+背景: https://example.com/bg.jpg
+字体: 宋体</pre>
+            <button class="btn btn-ghost btn-sm" id="apSample" style="margin-top:8px">${ui.icon('download', 13)}<span>下载示例</span></button>
+          </div>
+        </div>
+
+        <div style="margin-top:20px">
+          <div class="ap-label">预览</div>
+          <div class="ap-preview">
+            正文示例：<b>粗体文字</b>、<span class="ap-link">链接样式</span>、<code style="font-family:var(--mono);font-size:12px;background:var(--surface-3);padding:.12em .4em;border-radius:4px">code</code>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <div class="settings-dock">
+      <div class="save-bar" id="saveBar" hidden>
+        <span class="save-bar-text">有未保存的更改</span>
+        <button class="dock-btn ok" id="saveBtn" title="保存更改">${ui.icon('check', 17)}</button>
+        <button class="dock-btn cancel" id="cancelBtn" title="放弃更改">${ui.icon('close', 17)}</button>
+      </div>
+      <button class="user-chip" id="userChip" title="账号与外观">
+        <span class="avatar">${ui.esc(avatarText)}</span>
+        <span class="user-chip-name">${ui.esc(userName)}</span>
+        <span class="user-chip-palette">${ui.icon('palette', 15)}</span>
+      </button>
+    </div>`;
+
+  const drawer = dockHost.querySelector('#apDrawer');
+  const chip = dockHost.querySelector('#userChip');
+  const saveBar = dockHost.querySelector('#saveBar');
+
+  const dirtyNow = () => !same(draft, base)
+    || (ghBase && gh && !same(gh, ghBase));
+
+  const markDirty = () => {
+    const dirty = dirtyNow();
+    saveBar.hidden = !dirty;
+    const hint = $('#dirtyHint');
+    if (hint) hint.textContent = dirty ? '有未保存的更改' : '改动后点右下角保存';
+    if (hint) hint.style.color = dirty ? 'var(--accent-ink)' : '';
+  };
+
+  /* ---------- 外观：主题卡片 + 自定义主题 ---------- */
+  const cur = () => draft.appearance || (draft.appearance = {});
+
+  const previewNow = () => ctx.previewAppearance(cur());
+
   const paintThemes = () => {
     const cfg = cur();
     const active = cfg.theme || 'default';
     const custom = cfg.themes || [];
 
-    const grid = $('#apThemes');
+    const grid = dockHost.querySelector('#apThemes');
     grid.innerHTML = [
       ...THEMES.map((t) => themeCard(t, active === t.id)),
       ...custom.map((t) => themeCard(t, active === t.name, true)),
     ].join('');
 
     grid.querySelectorAll('[data-theme]').forEach((n) => {
-      n.onclick = async (e) => {
-        // 自定义主题卡片上的删除按钮不触发选中
+      n.onclick = (e) => {
         if (e.target.closest('[data-del-theme]')) return;
         const id = n.dataset.theme;
         if (id === cur().theme) return;
-        try {
-          await ctx.saveAppearance({ theme: id });
-          paintThemes();
-        } catch { /* 错误提示已由 saveAppearance 给出 */ }
+        cur().theme = id;
+        previewNow();
+        paintThemes();
+        markDirty();
       };
     });
     grid.querySelectorAll('[data-del-theme]').forEach((n) => {
-      n.onclick = async (e) => {
+      n.onclick = (e) => {
         e.stopPropagation();
         const name = n.dataset.delTheme;
-        const themes = (cur().themes || []).filter((t) => t.name !== name);
-        const theme = cur().theme === name ? 'default' : cur().theme;
-        try {
-          await ctx.saveAppearance({ theme, themes });
-          paintThemes();
-          paintUploadBox();
-          ui.toast('已删除主题', name, 'ok', 2500);
-        } catch { /* 错误提示已由 saveAppearance 给出 */ }
+        cur().themes = (cur().themes || []).filter((t) => t.name !== name);
+        if (cur().theme === name) cur().theme = 'default';
+        previewNow();
+        paintThemes();
+        markDirty();
+        ui.toast('已移除主题', `${name} · 保存后生效`, 'info', 2600);
       };
     });
 
@@ -301,7 +365,9 @@ export async function render(el, ctx) {
   };
 
   function themeCard(t, active, isCustom = false) {
-    const meta = isCustom ? fmtBytes(new Blob([t.js || '']).size) + ' · JS 主题' : `${t.font} · ${t.scale} · ${t.bg}`;
+    const meta = isCustom
+      ? fmtBytes(new Blob([t.js || '']).size) + ' · 声明式'
+      : `${t.font} · ${t.scale} · ${t.bg}`;
     return `
       <button class="theme-card ${active ? 'is-active' : ''}" data-theme="${ui.esc(isCustom ? t.name : t.id)}" title="${ui.esc(t.name)}">
         <span class="theme-preview">
@@ -311,12 +377,12 @@ export async function render(el, ctx) {
         </span>
         <span class="theme-name">${ui.esc(t.name)}</span>
         <span class="theme-meta">${ui.esc(meta)}</span>
-        ${isCustom ? `<span class="theme-del" data-del-theme="${ui.esc(t.name)}" title="删除主题">${ui.icon('close', 12)}</span>` : ''}
+        ${isCustom ? `<span class="theme-del" data-del-theme="${ui.esc(t.name)}" title="移除主题">${ui.icon('close', 12)}</span>` : ''}
       </button>`;
   }
 
   const paintUploadBox = () => {
-    const box = $('#apUpload');
+    const box = dockHost.querySelector('#apUpload');
     if (!box) return;
     const custom = cur().themes || [];
     box.innerHTML = `
@@ -332,7 +398,7 @@ export async function render(el, ctx) {
   };
 
   function bindUploadBox() {
-    const input = $('#apThemeFile');
+    const input = dockHost.querySelector('#apThemeFile');
     input.onchange = async () => {
       const file = input.files && input.files[0];
       if (!file) return;
@@ -343,13 +409,12 @@ export async function render(el, ctx) {
       }
       const installed = cur().themes || [];
       if (installed.length >= MAX_CUSTOM_THEMES) {
-        ui.toast('自定义主题已达上限', `最多 ${MAX_CUSTOM_THEMES} 个，请先删除不再使用的主题`, 'err', 5000);
+        ui.toast('自定义主题已达上限', `最多 ${MAX_CUSTOM_THEMES} 个，请先移除不再使用的主题`, 'err', 5000);
         input.value = '';
         return;
       }
       const truncated = file.size > MAX_THEME_JS;
       try {
-        // 与说明文档一致：超长文件只保留前 64 KB；服务端再按 UTF-8 字符边界收口。
         const text = await file.slice(0, MAX_THEME_JS).text();
         if (!text.trim()) {
           ui.toast('主题文件为空', '请选择有效的 .js 文件', 'err', 4000);
@@ -361,18 +426,65 @@ export async function render(el, ctx) {
         ]);
         const stem = file.name.replace(/\.js$/i, '').trim();
         const name = uniqueThemeName(stem || '自定义主题', taken);
-        const themes = [...installed, { name, js: text }];
-        await ctx.saveAppearance({ theme: name, themes });
+        cur().themes = [...installed, { name, js: text }];
+        cur().theme = name;
+        previewNow();
         paintThemes();
-        const savedName = cur().theme || name;
-        ui.toast(truncated ? '主题已添加并截断至 64 KB' : '主题已添加', savedName, 'ok', 3500);
-      } catch { /* 错误提示已由 saveAppearance 给出 */ }
-      finally { input.value = ''; }
+        markDirty();
+        ui.toast(truncated ? '主题已添加并截断至 64 KB' : '主题已添加', `${name} · 保存后生效`, 'ok', 3200);
+      } finally { input.value = ''; }
     };
   }
-  paintThemes();
 
-  /* ---------- 子菜单切换 ---------- */
+  const paintMode = () => {
+    const mode = cur().mode || 'auto';
+    dockHost.querySelectorAll('#apMode .tab').forEach((t) => {
+      t.classList.toggle('is-active', mode === t.dataset.mode);
+    });
+  };
+
+  dockHost.querySelectorAll('#apMode .tab').forEach((t) => {
+    t.onclick = () => {
+      if ((cur().mode || 'auto') === t.dataset.mode) return;
+      cur().mode = t.dataset.mode;
+      previewNow();
+      paintMode();
+      markDirty();
+    };
+  });
+
+  dockHost.querySelector('#apSample').onclick = () => {
+    const blob = new Blob([SAMPLE_THEME], { type: 'text/javascript;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'my-theme.js';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  };
+
+  paintThemes();
+  paintMode();
+
+  /* ---------- 抽屉开合 ---------- */
+  const setDrawer = (open) => {
+    drawer.classList.toggle('open', open);
+    // 抽屉铺满右侧时收起用户卡片，把右下角让给保存条
+    chip.hidden = open;
+  };
+  chip.onclick = () => setDrawer(!drawer.classList.contains('open'));
+  dockHost.querySelector('#apClose').onclick = () => setDrawer(false);
+  document.addEventListener('keydown', function onEsc(e) {
+    if (e.key !== 'Escape') return;
+    if (!document.body.contains(drawer)) {
+      document.removeEventListener('keydown', onEsc);
+      return;
+    }
+    if (drawer.classList.contains('open') && !document.getElementById('modalHost').classList.contains('open')) {
+      setDrawer(false);
+    }
+  });
+
+  /* ---------- 子菜单 ---------- */
   const tabs = [...el.querySelectorAll('.subnav-item')];
   const panels = [...el.querySelectorAll('[data-panel]')];
   tabs.forEach((t) => {
@@ -382,75 +494,111 @@ export async function render(el, ctx) {
     };
   });
 
-  /* ---------- 检测更新 ---------- */
-  const paintUpdate = (r) => {
-    const box = $('#updateResult');
-    box.hidden = false;
-    if (r.error) {
-      box.innerHTML = `<div class="update-card is-err">${ui.icon('alert', 18)}<div class="update-body"><b>检查失败</b><p>${ui.esc(r.error)}</p></div></div>`;
-      return;
-    }
-    if (!r.hasUpdate) {
-      // 仓库最新号与当前一致时才并列展示；低于当前（本地开发版）不显示，避免误解
-      const same = r.latest && r.latest === r.current;
-      box.innerHTML = `<div class="update-card is-ok">${ui.icon('check', 18)}<div class="update-body"><b>已是最新版本</b><p>当前 v${ui.esc(r.current)}${same ? ` · 仓库最新 v${ui.esc(r.latest)}` : ''}</p></div></div>`;
-      return;
-    }
-    const link = (label, url, icon) => url
-      ? `<a class="btn btn-ghost btn-sm" href="${ui.esc(url)}" target="_blank" rel="noopener noreferrer">${ui.icon(icon, 14)}<span>${label}</span></a>`
-      : '';
-    const acc = (u) => 'https://gh-proxy.com/' + u;
-    box.innerHTML = `
-      <div class="update-card is-new">
-        <div class="update-head">${ui.icon('rocket', 18)}
-          <div class="update-body">
-            <b>发现新版本 v${ui.esc(r.latest)}</b>
-            <p>当前 v${ui.esc(r.current)}${r.date ? ` · 发布于 ${ui.esc(r.date)}` : ''}</p>
-          </div>
-        </div>
-        ${r.notes ? `<pre class="update-notes">${ui.esc(r.notes)}</pre>` : ''}
-        <div class="update-actions">
-          ${link('x86 安装包', r.x86, 'download')}
-          ${link('x86 加速下载', acc(r.x86), 'download')}
-          ${link('ARM 安装包', r.arm, 'download')}
-          ${link('ARM 加速下载', acc(r.arm), 'download')}
-          ${link('Release 页面', r.release, 'external')}
-        </div>
-      </div>`;
-  };
+  /* ---------- 保存 / 取消 ---------- */
+  const saveBtn = dockHost.querySelector('#saveBtn');
+  const cancelBtn = dockHost.querySelector('#cancelBtn');
 
-  $('#checkUpdateBtn').onclick = async (e) => {
-    const btn = e.currentTarget;
-    const label = btn.querySelector('span');
-    btn.disabled = true;
-    label.textContent = '检查中…';
-    try {
-      paintUpdate(await api.checkUpdate());
-    } catch (err) {
-      paintUpdate({ error: err.message });
-    } finally {
-      btn.disabled = false;
-      label.textContent = '检查更新';
+  // 逐段提交：每段成功后立刻把它记为新的基线，失败则停在原地等待重试
+  async function save() {
+    const jobs = [];
+
+    if (!same(draft.appearance, base.appearance)) {
+      jobs.push(['外观', async () => {
+        const applied = await ctx.saveAppearance(clone(draft.appearance));
+        draft.appearance = clone(applied);
+        base.appearance = clone(applied);
+        paintThemes();
+        paintMode();
+      }]);
     }
+    if (draft.publishEnabled !== base.publishEnabled) {
+      jobs.push(['发布', async () => {
+        await api.setPublishEnabled(draft.publishEnabled);
+        base.publishEnabled = draft.publishEnabled;
+        if (ctx.state) ctx.state.publishEnabled = draft.publishEnabled;
+      }]);
+    }
+    if (!same(draft.cloudinary, base.cloudinary)) {
+      jobs.push(['图床', async () => {
+        await api.saveSettings({ cloudinary: clone(draft.cloudinary) });
+        base.cloudinary = clone(draft.cloudinary);
+        if (ctx.state) ctx.state.cloudinary = { ...(ctx.state.cloudinary || {}), ...clone(draft.cloudinary) };
+        ctx.syncCloudinary && ctx.syncCloudinary(draft.cloudinary.enabled);
+      }]);
+    }
+    if (ghBase && gh && !same(gh, ghBase)) {
+      jobs.push(['GitHub 加速', async () => {
+        const r = await api.saveGithubProxy({ enabled: gh.enabled, active: gh.active, custom: gh.custom });
+        gh = { ...gh, enabled: !!r.enabled, active: r.active || '', custom: r.custom || [] };
+        ghBase = clone(gh);
+        paintGh();
+      }]);
+    }
+
+    if (!jobs.length) { markDirty(); return true; }
+
+    saveBtn.disabled = true;
+    const failed = [];
+    for (const [label, run] of jobs) {
+      try {
+        await run();
+      } catch (e) {
+        failed.push(`${label}：${e.message}`);
+      }
+    }
+    saveBtn.disabled = false;
+    markDirty();
+
+    if (failed.length) {
+      ui.toast('部分设置未保存', failed.join('；'), 'err', 7000);
+      return false;
+    }
+    ui.toast('已保存', '', 'ok', 2200);
+    return true;
+  }
+
+  function cancel() {
+    draft.appearance = clone(base.appearance);
+    draft.publishEnabled = base.publishEnabled;
+    draft.cloudinary = clone(base.cloudinary);
+    if (ghBase) gh = clone(ghBase);
+    ctx.revertAppearance();
+
+    // 表单控件回到基线
+    const pubToggle = $('#pubToggle');
+    if (pubToggle) pubToggle.checked = draft.publishEnabled;
+    const cloudOn = $('#cloudOn');
+    if (cloudOn) cloudOn.checked = draft.cloudinary.enabled;
+    const cloudState = $('#cloudStateText');
+    if (cloudState) cloudState.textContent = draft.cloudinary.enabled ? '已启用' : '未启用';
+    const cn = $('#cloudName');
+    if (cn) cn.value = draft.cloudinary.cloudName;
+    const up = $('#preset');
+    if (up) up.value = draft.cloudinary.uploadPreset;
+
+    paintThemes();
+    paintMode();
+    if (gh) paintGh();
+    markDirty();
+    ui.toast('已取消修改', '', 'info', 1800);
+  }
+
+  saveBtn.onclick = () => save();
+  cancelBtn.onclick = () => cancel();
+
+  /* ---------- 离开确认 ---------- */
+  ctx.leaveGuard = async () => {
+    if (!dirtyNow()) return true;
+    const choice = await ui.unsavedDialog(() => save());
+    return !!choice;
   };
+  ctx.hasUnsaved = () => dirtyNow();
 
   /* ---------- 发布设置 ---------- */
   const pubToggle = $('#pubToggle');
-  pubToggle.onchange = async (e) => {
-    const on = e.target.checked;
-    pubToggle.disabled = true;
-    try {
-      await api.setPublishEnabled(on);
-      if (ctx.state) ctx.state.publishEnabled = on;
-      ui.toast(on ? '已启用发布' : '已关闭发布',
-        on ? '文章编辑页将显示「发布」按钮' : '编辑页不再显示发布入口',
-        on ? 'ok' : 'info');
-    } catch (err) {
-      e.target.checked = !on;
-      ui.toast('保存失败', err.message, 'err');
-    } finally {
-      pubToggle.disabled = false;
-    }
+  pubToggle.onchange = () => {
+    draft.publishEnabled = pubToggle.checked;
+    markDirty();
   };
 
   const pubList = $('#pubList');
@@ -466,9 +614,12 @@ export async function render(el, ctx) {
       pubList.innerHTML = `<div class="hint" style="color:var(--err)">加载失败：${ui.esc(e.message)}</div>`;
       return;
     }
-    if (r.enabled !== undefined) {
-      pubToggle.checked = !!r.enabled;
-      if (ctx.state) ctx.state.publishEnabled = !!r.enabled;
+    if (r.enabled !== undefined && base.publishEnabled === draft.publishEnabled) {
+      // 没有本地未保存改动时以服务端为准；有改动则保留用户刚点的状态
+      draft.publishEnabled = !!r.enabled;
+      base.publishEnabled = !!r.enabled;
+      pubToggle.checked = draft.publishEnabled;
+      if (ctx.state) ctx.state.publishEnabled = draft.publishEnabled;
     }
     const installed = r.installed || [];
     const available = (r.available || []).filter((a) => !installed.some((p) => p.id === a.id));
@@ -549,11 +700,12 @@ export async function render(el, ctx) {
   /* ---------- 管理员：GitHub 加速源 ---------- */
   const ghToggle = $('#ghProxyToggle');
   const ghBody = $('#ghProxyBody');
+  let paintGh = () => {};
+
   if (ghToggle && ghBody) {
     const presetsEl = $('#ghPresets');
     const customEl = $('#ghCustomList');
     const statusEl = $('#ghStatus');
-    let gh = { enabled: false, active: '', custom: [], presets: [] };
 
     const paintPresets = () => {
       const opts = [
@@ -570,7 +722,7 @@ export async function render(el, ctx) {
           </label>`).join('')
         : '<p class="hint">暂无可用线路，可添加自定义地址</p>';
       presetsEl.querySelectorAll('.gh-opt').forEach((n) => {
-        n.onclick = () => { gh.active = n.dataset.url; paintPresets(); };
+        n.onclick = () => { gh.active = n.dataset.url; paintPresets(); markDirty(); };
       });
     };
 
@@ -588,11 +740,12 @@ export async function render(el, ctx) {
           if (gh.active === n.dataset.del) gh.active = '';
           paintCustom();
           paintPresets();
+          markDirty();
         };
       });
     };
 
-    const paintAll = () => {
+    paintGh = () => {
       ghToggle.checked = !!gh.enabled;
       ghBody.hidden = !gh.enabled;
       paintPresets();
@@ -602,7 +755,9 @@ export async function render(el, ctx) {
     try {
       const r = await api.githubProxy();
       gh = { enabled: !!r.enabled, active: r.active || '', custom: r.custom || [], presets: r.presets || [] };
-      paintAll();
+      ghBase = clone(gh);
+      paintGh();
+      markDirty();
     } catch (e) {
       statusEl.textContent = '加载失败：' + e.message;
     }
@@ -614,6 +769,7 @@ export async function render(el, ctx) {
         gh.active = (gh.presets[0] && gh.presets[0].url) || '';
         paintPresets();
       }
+      markDirty();
     };
 
     $('#ghAdd').onclick = () => {
@@ -632,24 +788,7 @@ export async function render(el, ctx) {
       input.value = '';
       paintCustom();
       paintPresets();
-    };
-
-    $('#saveGhProxy').onclick = async (e) => {
-      const btn = e.currentTarget;
-      btn.disabled = true;
-      try {
-        const r = await api.saveGithubProxy({ enabled: gh.enabled, active: gh.active, custom: gh.custom });
-        gh.enabled = !!r.enabled;
-        gh.active = r.active || '';
-        gh.custom = r.custom || [];
-        paintAll();
-        statusEl.textContent = gh.enabled ? '已保存，加速已开启' : '已保存，当前为直连';
-        ui.toast('已保存', gh.enabled ? 'GitHub 访问将走加速线路' : '已恢复直连', 'ok');
-      } catch (err) {
-        ui.toast('保存失败', err.message, 'err', 6000);
-      } finally {
-        btn.disabled = false;
-      }
+      markDirty();
     };
 
     $('#testGhProxy').onclick = async (e) => {
@@ -669,33 +808,18 @@ export async function render(el, ctx) {
   }
 
   /* ---------- 图床 ---------- */
-  $('#cloudOn') && ($('#cloudOn').onchange = (e) => { $('#cloudStateText').textContent = e.target.checked ? '已启用' : '未启用'; });
-  $('#saveCloud') && ($('#saveCloud').onclick = async () => {
-    const body = {
-      cloudinary: {
-        enabled: $('#cloudOn').checked,
-        cloudName: $('#cloudName').value.trim(),
-        uploadPreset: $('#preset').value.trim(),
-      },
+  const cloudOn = $('#cloudOn');
+  if (cloudOn) {
+    cloudOn.onchange = () => {
+      draft.cloudinary.enabled = cloudOn.checked;
+      $('#cloudStateText').textContent = cloudOn.checked ? '已启用' : '未启用';
+      markDirty();
     };
-    try {
-      await api.saveSettings(body);
-      ui.toast('已保存', '图床设置已更新', 'ok');
-      ctx.refreshState();
-    } catch (e) { ui.toast('保存失败', e.message, 'err', 6000); }
-  });
+    $('#cloudName').oninput = (e) => { draft.cloudinary.cloudName = e.target.value.trim(); markDirty(); };
+    $('#preset').oninput = (e) => { draft.cloudinary.uploadPreset = e.target.value.trim(); markDirty(); };
+  }
 
-  /* ---------- 外观：主题模式 ---------- */
-  const modeTabs = $('#apMode');
-  modeTabs.querySelectorAll('.tab').forEach((t) => {
-    t.classList.toggle('is-active', (ap.mode || 'auto') === t.dataset.mode);
-    t.onclick = async () => {
-      modeTabs.querySelectorAll('.tab').forEach((x) => x.classList.toggle('is-active', x === t));
-      await ctx.setTheme(t.dataset.mode);
-    };
-  });
-
-  /* ---------- 存储路径 ---------- */
+  /* ---------- 存储路径（立即生效） ---------- */
   const changeBtn = $('#changeStorage');
   changeBtn && (changeBtn.onclick = () => openBrowser(ctx));
   const resetBtn = $('#resetStorage');
@@ -714,6 +838,59 @@ export async function render(el, ctx) {
   });
   const reloadBtn = $('#reload');
   reloadBtn && (reloadBtn.onclick = () => ctx.refresh());
+
+  /* ---------- 检测更新 ---------- */
+  const paintUpdate = (r) => {
+    const box = $('#updateResult');
+    box.hidden = false;
+    if (r.error) {
+      box.innerHTML = `<div class="update-card is-err">${ui.icon('alert', 18)}<div class="update-body"><b>检查失败</b><p>${ui.esc(r.error)}</p></div></div>`;
+      return;
+    }
+    if (!r.hasUpdate) {
+      const sameVer = r.latest && r.latest === r.current;
+      box.innerHTML = `<div class="update-card is-ok">${ui.icon('check', 18)}<div class="update-body"><b>已是最新版本</b><p>当前 v${ui.esc(r.current)}${sameVer ? ` · 仓库最新 v${ui.esc(r.latest)}` : ''}</p></div></div>`;
+      return;
+    }
+    const link = (label, url, icon) => url
+      ? `<a class="btn btn-ghost btn-sm" href="${ui.esc(url)}" target="_blank" rel="noopener noreferrer">${ui.icon(icon, 14)}<span>${label}</span></a>`
+      : '';
+    const acc = (u) => 'https://gh-proxy.com/' + u;
+    box.innerHTML = `
+      <div class="update-card is-new">
+        <div class="update-head">${ui.icon('rocket', 18)}
+          <div class="update-body">
+            <b>发现新版本 v${ui.esc(r.latest)}</b>
+            <p>当前 v${ui.esc(r.current)}${r.date ? ` · 发布于 ${ui.esc(r.date)}` : ''}</p>
+          </div>
+        </div>
+        ${r.notes ? `<pre class="update-notes">${ui.esc(r.notes)}</pre>` : ''}
+        <div class="update-actions">
+          ${link('x86 安装包', r.x86, 'download')}
+          ${link('x86 加速下载', acc(r.x86), 'download')}
+          ${link('ARM 安装包', r.arm, 'download')}
+          ${link('ARM 加速下载', acc(r.arm), 'download')}
+          ${link('Release 页面', r.release, 'external')}
+        </div>
+      </div>`;
+  };
+
+  $('#checkUpdateBtn').onclick = async (e) => {
+    const btn = e.currentTarget;
+    const label = btn.querySelector('span');
+    btn.disabled = true;
+    label.textContent = '检查中…';
+    try {
+      paintUpdate(await api.checkUpdate());
+    } catch (err) {
+      paintUpdate({ error: err.message });
+    } finally {
+      btn.disabled = false;
+      label.textContent = '检查更新';
+    }
+  };
+
+  markDirty();
 }
 
 /* ---------------- 目录浏览器 ---------------- */
