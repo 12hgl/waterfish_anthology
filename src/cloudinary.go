@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// uploadClient 与 SEO 共用带 DNS 备用线路的 Transport，超时放宽到 60s。
+// uploadClient 与外网请求共用带 DNS 备用线路的 Transport，超时放宽到 60s。
 var uploadClient = &http.Client{Timeout: 60 * time.Second, Transport: externalTransport}
 
 // uploadToCloudinary 通过 unsigned upload 上传图片到 Cloudinary。

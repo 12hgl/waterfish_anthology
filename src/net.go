@@ -20,7 +20,7 @@ var fallbackDNS = []string{
 	"1.1.1.1:53",      // Cloudflare
 }
 
-// externalTransport 供所有外网请求（SEO 接口、搜索引擎、Cloudinary）使用。
+// externalTransport 供所有外网请求（更新检测、适配器下载、Cloudinary）使用。
 var externalTransport = &http.Transport{
 	DialContext:           dialWithFallback,
 	MaxIdleConns:          32,

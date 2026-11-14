@@ -1,8 +1,6 @@
-/* 设置：发布设置 / 管理员设置（图床 + 存储 + GitHub 加速） / 更新 / 关于
-   账号与外观收进右下角的用户卡片，点开是外观抽屉。
-
-   保存模型：改动先落在草稿上，右下角出现「保存 / 取消」；
-   切换子菜单、开关抽屉都不会丢草稿，点保存才写服务端。 */
+/* 设置：发布设置 / 管理员设置 / 关于与更新
+   账号与外观收进左下角的用户卡片，点开是外观抽屉。
+   保存模型：改动即时保存，无需手动确认（外部文件编辑器仍有离开提示）。 */
 
 import { api } from '../api.js';
 import * as ui from '../ui.js';
@@ -21,15 +19,34 @@ const THEMES = [
   { id: 'rose',    name: '玫红',   color: '#BE4B6B', font: '系统字体', scale: '100%', bg: '淡彩' },
 ];
 
-const SAMPLE_THEME = `// 一行写一项，只写想改的，其余的沿用内置外观
+const SAMPLE_SIMPLE = `// 简单主题：一行写一项，只写想改的，其余沿用内置外观
 主色: #1F6C9F
 副色: #B45309
 背景: https://example.com/bg.jpg
 字体: 宋体
 `;
 
+const SAMPLE_COMPLEX = `// 复杂主题：定义 function theme(api)，可调界面、动画、图标
+function theme(api) {
+  // 调变量（CSS 变量）
+  api.setVar('--accent', '#7C5CFF');
+  api.setVar('--r', '14px');
+
+  // 注入样式：界面微调、动画都写在这里
+  api.css(\`
+    .card { transition: transform .25s ease, box-shadow .25s ease; }
+    .card:hover { transform: translateY(-2px); }
+    .page-title { letter-spacing: .02em; }
+    .theme-card { animation: apFadeUp .3s ease both; }
+    @keyframes apFadeUp { from { opacity: 0; transform: translateY(6px); } }
+  \`);
+
+  // 换图标（可选）：用 SVG path 覆盖内置图标，颜色跟随 currentColor
+  api.icon('rocket', '<path d="M12 3l7 7-9 11H4v-6z"/><circle cx="14.5" cy="8.5" r="1.4" fill="currentColor" stroke="none"/>');
+}
+`;
+
 const clone = (v) => JSON.parse(JSON.stringify(v ?? null));
-const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 function fmtBytes(n) {
   if (n < 1024) return n + ' B';
@@ -50,38 +67,20 @@ export async function render(el, ctx) {
   const userName = st.user?.name || '未知';
   const avatarText = [...userName][0] || '?';
 
-  /* ---------- 草稿 ---------- */
-  const base = {
-    appearance: clone(st.appearance || {}),
-    publishEnabled: st.publishEnabled !== false,
-    cloudinary: {
-      enabled: !!st.cloudinary?.enabled,
-      cloudName: st.cloudinary?.cloudName || '',
-      uploadPreset: st.cloudinary?.uploadPreset || '',
-    },
-  };
-  const draft = clone(base);
-  // GitHub 加速源按服务端下发的预设初始化，保存前也只改草稿
-  let ghBase = null;
-  let gh = null;
-
   el.innerHTML = `
     <div class="page-head">
       <div>
         <h1 class="page-title">设置</h1>
       </div>
-      <div class="spacer"></div>
-      <span class="hint" id="dirtyHint">改动后点右下角保存</span>
     </div>
 
     <div class="subnav" id="subnav">
       <button class="subnav-item is-active" data-tab="publish">发布设置</button>
       ${isAdmin ? '<button class="subnav-item" data-tab="admin">管理员设置</button>' : ''}
-      <button class="subnav-item" data-tab="updates">更新</button>
-      <button class="subnav-item" data-tab="about">关于</button>
+      <button class="subnav-item" data-tab="about">关于与更新</button>
     </div>
 
-    <!-- 发布设置（所有账号可用；装载插件仅管理员） -->
+    <!-- 发布设置（所有账号可用；平台安装 / 卸载在管理员设置） -->
     <div data-panel="publish">
       <div class="card card-pad section">
         <div class="section-title">发布文章（Beta）</div>
@@ -91,51 +90,52 @@ export async function render(el, ctx) {
             <p>开启后文章编辑页会显示「发布」按钮：可复制发布（有图床时图片自动转成直链），也可统一发布到已安装的平台。开关、密钥都按账号独立保存。</p>
           </div>
           <label class="switch" title="开启 / 关闭发布功能">
-            <input type="checkbox" id="pubToggle" ${draft.publishEnabled ? 'checked' : ''}>
+            <input type="checkbox" id="pubToggle" ${st.publishEnabled !== false ? 'checked' : ''}>
             <span class="switch-track"></span>
           </label>
         </div>
       </div>
 
+      ${isAdmin ? `
+      <p class="section-desc" style="margin-top:4px">平台适配器的安装与卸载已移到「管理员设置」；各平台的密钥在文章发布弹窗内配置。</p>` : `
+      <p class="section-desc" style="margin-top:4px">发布平台由管理员统一安装；各平台的密钥在文章发布弹窗内配置，仅自己可见。</p>`}
+    </div>
+
+    <!-- 管理员设置：平台安装 + 图床 + 存储路径 + GitHub 加速（仅管理员可见） -->
+    ${isAdmin ? `
+    <div data-panel="admin" hidden>
       <div class="card card-pad section">
         <div class="section-title">已安装平台</div>
-        <p class="section-desc">${isAdmin
-          ? '平台适配器装在系统目录，装一次全体账号可用；每个账号填写自己的密钥，互相不可见。'
-          : '平台由管理员安装，全体账号可用；在这里填写你自己的密钥，其他账号看不到。'}</p>
+        <p class="section-desc">装一次全体账号可用；各账号的密钥在发布弹窗里自己填，互相不可见。</p>
         <div class="pub-admin-list" id="pubList"></div>
       </div>
 
-      ${isAdmin ? `
       <div class="card card-pad section">
-        <div class="section-title">安装 / 卸载平台（仅管理员）</div>
+        <div class="section-title">下载安装（仅管理员）</div>
         <p class="section-desc">适配器代码托管在项目仓库，按需下载，不内置在安装包里。</p>
         <div class="pub-admin-list" id="pubAvailable"></div>
         <span class="hint" id="pubListError"></span>
-      </div>` : ''}
-    </div>
+      </div>
 
-    <!-- 管理员设置：图床 + 存储路径 + GitHub 加速（仅管理员可见） -->
-    ${isAdmin ? `
-    <div data-panel="admin" hidden>
       <div class="card card-pad section">
         <div class="section-title">图床 · Cloudinary</div>
 
         <div class="field">
           <label>启用图床</label>
           <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:400">
-            <input type="checkbox" id="cloudOn" ${draft.cloudinary.enabled ? 'checked' : ''} style="width:16px;height:16px;accent-color:var(--accent)">
-            <span id="cloudStateText">${draft.cloudinary.enabled ? '已启用' : '未启用'}</span>
+            <input type="checkbox" id="cloudOn" ${(st.cloudinary?.enabled) ? 'checked' : ''} style="width:16px;height:16px;accent-color:var(--accent)">
+            <span id="cloudStateText">${st.cloudinary?.enabled ? '已启用' : '未启用'}</span>
           </label>
         </div>
 
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0 18px">
           <div class="field">
             <label for="cloudName">Cloud name</label>
-            <input class="input" id="cloudName" placeholder="如 dxxxxxx" value="${ui.esc(draft.cloudinary.cloudName)}" spellcheck="false">
+            <input class="input" id="cloudName" placeholder="如 dxxxxxx" value="${ui.esc(st.cloudinary?.cloudName || '')}" spellcheck="false">
           </div>
           <div class="field">
             <label for="preset">Upload preset</label>
-            <input class="input" id="preset" placeholder="如 waterfish_unsigned" value="${ui.esc(draft.cloudinary.uploadPreset)}" spellcheck="false">
+            <input class="input" id="preset" placeholder="如 waterfish_unsigned" value="${ui.esc(st.cloudinary?.uploadPreset || '')}" spellcheck="false">
           </div>
         </div>
 
@@ -146,7 +146,7 @@ export async function render(el, ctx) {
 
       <div class="card card-pad section">
         <div class="section-title">本地存储路径</div>
-        <p class="section-desc">切换路径会立即搬迁数据，不进入待保存队列。</p>
+        <p class="section-desc">切换路径会立即搬迁数据。</p>
 
         <dl class="kv" style="margin-bottom:16px">
           <dt>当前路径</dt>
@@ -217,32 +217,33 @@ export async function render(el, ctx) {
       </div>
     </div>` : ''}
 
-    <!-- 更新 -->
-    <div class="card card-pad section" data-panel="updates" hidden>
-      <div class="section-title">检测更新</div>
-      <p class="section-desc">当前版本 v${ui.esc(st.version)}</p>
-      <div class="update-bar">
-        <button class="btn btn-primary btn-sm" id="checkUpdateBtn">${ui.icon('refresh', 14)}<span>检查更新</span></button>
+    <!-- 关于与更新 -->
+    <div data-panel="about" hidden>
+      <div class="card card-pad section">
+        <div class="section-title">关于</div>
+        <dl class="kv">
+          <dt>应用名称</dt><dd>水鱼文集</dd>
+          <dt>当前版本</dt><dd>v${ui.esc(st.version)}</dd>
+          <dt>登录账号</dt><dd>${ui.esc(userName)}${isAdmin ? ' · 管理员' : ' · 成员'}${st.user?.source === 'local' ? ' · 局域网直连' : ''}</dd>
+        </dl>
       </div>
-      <div class="update-result" id="updateResult" hidden></div>
+
+      <div class="card card-pad section">
+        <div class="section-title">检测更新</div>
+        <p class="section-desc">当前版本 v${ui.esc(st.version)}</p>
+        <div class="update-bar">
+          <button class="btn btn-primary btn-sm" id="checkUpdateBtn">${ui.icon('refresh', 14)}<span>检查更新</span></button>
+        </div>
+        <div class="update-result" id="updateResult" hidden></div>
+      </div>
     </div>
 
-    <!-- 关于 -->
-    <div class="card card-pad section" data-panel="about" hidden>
-      <div class="section-title">关于</div>
-      <dl class="kv">
-        <dt>应用名称</dt><dd>水鱼文集</dd>
-        <dt>当前版本</dt><dd>v${ui.esc(st.version)}</dd>
-        <dt>登录账号</dt><dd>${ui.esc(userName)}${isAdmin ? ' · 管理员' : ' · 成员'}${st.user?.source === 'local' ? ' · 局域网直连' : ''}</dd>
-      </dl>
-    </div>
-
-    <div style="height:56px" aria-hidden="true"></div>
+    <div style="height:20px" aria-hidden="true"></div>
   `;
 
   const $ = (s) => el.querySelector(s);
 
-  /* ---------- 右下角：保存条 + 用户卡片 + 外观抽屉 ---------- */
+  /* ---------- 左下角：用户卡片 + 外观抽屉 ---------- */
   const dockHost = document.getElementById('dockHost');
   dockHost.innerHTML = `
     <aside class="ap-drawer" id="apDrawer" aria-label="外观设置">
@@ -275,12 +276,15 @@ export async function render(el, ctx) {
           <div class="ap-label">自定义主题</div>
           <div class="ap-upload" id="apUpload"></div>
           <div class="ap-hint" style="margin-top:10px">
-            <p style="margin:0 0 8px">主题文件一行一条，只写想改的项，其余沿用内置外观。</p>
+            <p style="margin:0 0 8px">主题是 .js 文件，两种写法：<b>简单</b>一行一条只调外观；<b>复杂</b>定义 function theme(api)，可调界面、动画、图标。</p>
             <pre class="ap-spec">主色: #1F6C9F
 副色: #B45309
 背景: https://example.com/bg.jpg
 字体: 宋体</pre>
-            <button class="btn btn-ghost btn-sm" id="apSample" style="margin-top:8px">${ui.icon('download', 13)}<span>下载示例</span></button>
+            <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+              <button class="btn btn-ghost btn-sm" id="apSampleSimple">${ui.icon('download', 13)}<span>简单示例</span></button>
+              <button class="btn btn-ghost btn-sm" id="apSampleComplex">${ui.icon('download', 13)}<span>复杂示例</span></button>
+            </div>
           </div>
         </div>
 
@@ -294,11 +298,6 @@ export async function render(el, ctx) {
     </aside>
 
     <div class="settings-dock">
-      <div class="save-bar" id="saveBar" hidden>
-        <span class="save-bar-text">有未保存的更改</span>
-        <button class="dock-btn ok" id="saveBtn" title="保存更改">${ui.icon('check', 17)}</button>
-        <button class="dock-btn cancel" id="cancelBtn" title="放弃更改">${ui.icon('close', 17)}</button>
-      </div>
       <button class="user-chip" id="userChip" title="账号与外观">
         <span class="avatar">${ui.esc(avatarText)}</span>
         <span class="user-chip-name">${ui.esc(userName)}</span>
@@ -308,28 +307,23 @@ export async function render(el, ctx) {
 
   const drawer = dockHost.querySelector('#apDrawer');
   const chip = dockHost.querySelector('#userChip');
-  const saveBar = dockHost.querySelector('#saveBar');
 
-  const dirtyNow = () => !same(draft, base)
-    || (ghBase && gh && !same(gh, ghBase));
+  /* ---------- 外观：主题卡片 + 自定义主题（即时保存） ---------- */
+  let appearance = clone(st.appearance || {});
 
-  const markDirty = () => {
-    const dirty = dirtyNow();
-    saveBar.hidden = !dirty;
-    const hint = $('#dirtyHint');
-    if (hint) hint.textContent = dirty ? '有未保存的更改' : '改动后点右下角保存';
-    if (hint) hint.style.color = dirty ? 'var(--accent-ink)' : '';
+  // 改动即保存：成功后以服务端清洗结果为准，失败则回滚到上次保存值
+  const commitAppearance = async () => {
+    try {
+      const applied = await ctx.saveAppearance(clone(appearance));
+      appearance = clone(applied);
+    } catch { appearance = clone(ctx.state?.appearance || {}); }
+    paintThemes();
+    paintMode();
   };
 
-  /* ---------- 外观：主题卡片 + 自定义主题 ---------- */
-  const cur = () => draft.appearance || (draft.appearance = {});
-
-  const previewNow = () => ctx.previewAppearance(cur());
-
   const paintThemes = () => {
-    const cfg = cur();
-    const active = cfg.theme || 'default';
-    const custom = cfg.themes || [];
+    const active = appearance.theme || 'default';
+    const custom = appearance.themes || [];
 
     const grid = dockHost.querySelector('#apThemes');
     grid.innerHTML = [
@@ -341,23 +335,19 @@ export async function render(el, ctx) {
       n.onclick = (e) => {
         if (e.target.closest('[data-del-theme]')) return;
         const id = n.dataset.theme;
-        if (id === cur().theme) return;
-        cur().theme = id;
-        previewNow();
-        paintThemes();
-        markDirty();
+        if (id === (appearance.theme || 'default')) return;
+        appearance.theme = id;
+        commitAppearance();
       };
     });
     grid.querySelectorAll('[data-del-theme]').forEach((n) => {
       n.onclick = (e) => {
         e.stopPropagation();
         const name = n.dataset.delTheme;
-        cur().themes = (cur().themes || []).filter((t) => t.name !== name);
-        if (cur().theme === name) cur().theme = 'default';
-        previewNow();
-        paintThemes();
-        markDirty();
-        ui.toast('已移除主题', `${name} · 保存后生效`, 'info', 2600);
+        appearance.themes = (appearance.themes || []).filter((t) => t.name !== name);
+        if (appearance.theme === name) appearance.theme = 'default';
+        commitAppearance();
+        ui.toast('已移除主题', name, 'info', 2400);
       };
     });
 
@@ -366,7 +356,7 @@ export async function render(el, ctx) {
 
   function themeCard(t, active, isCustom = false) {
     const meta = isCustom
-      ? fmtBytes(new Blob([t.js || '']).size) + ' · 声明式'
+      ? fmtBytes(new Blob([t.js || '']).size) + ' · ' + (/function\s+theme\s*\(/.test(t.js || '') ? '复杂' : '简单')
       : `${t.font} · ${t.scale} · ${t.bg}`;
     return `
       <button class="theme-card ${active ? 'is-active' : ''}" data-theme="${ui.esc(isCustom ? t.name : t.id)}" title="${ui.esc(t.name)}">
@@ -384,7 +374,7 @@ export async function render(el, ctx) {
   const paintUploadBox = () => {
     const box = dockHost.querySelector('#apUpload');
     if (!box) return;
-    const custom = cur().themes || [];
+    const custom = appearance.themes || [];
     box.innerHTML = `
       <input type="file" id="apThemeFile" accept=".js,text/javascript,application/javascript">
       <label for="apThemeFile" style="cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--ink-3)">
@@ -407,7 +397,7 @@ export async function render(el, ctx) {
         input.value = '';
         return;
       }
-      const installed = cur().themes || [];
+      const installed = appearance.themes || [];
       if (installed.length >= MAX_CUSTOM_THEMES) {
         ui.toast('自定义主题已达上限', `最多 ${MAX_CUSTOM_THEMES} 个，请先移除不再使用的主题`, 'err', 5000);
         input.value = '';
@@ -426,18 +416,16 @@ export async function render(el, ctx) {
         ]);
         const stem = file.name.replace(/\.js$/i, '').trim();
         const name = uniqueThemeName(stem || '自定义主题', taken);
-        cur().themes = [...installed, { name, js: text }];
-        cur().theme = name;
-        previewNow();
-        paintThemes();
-        markDirty();
-        ui.toast(truncated ? '主题已添加并截断至 64 KB' : '主题已添加', `${name} · 保存后生效`, 'ok', 3200);
+        appearance.themes = [...installed, { name, js: text }];
+        appearance.theme = name;
+        await commitAppearance();
+        ui.toast(truncated ? '主题已添加并截断至 64 KB' : '主题已添加', name, 'ok', 3200);
       } finally { input.value = ''; }
     };
   }
 
   const paintMode = () => {
-    const mode = cur().mode || 'auto';
+    const mode = appearance.mode || 'auto';
     dockHost.querySelectorAll('#apMode .tab').forEach((t) => {
       t.classList.toggle('is-active', mode === t.dataset.mode);
     });
@@ -445,32 +433,28 @@ export async function render(el, ctx) {
 
   dockHost.querySelectorAll('#apMode .tab').forEach((t) => {
     t.onclick = () => {
-      if ((cur().mode || 'auto') === t.dataset.mode) return;
-      cur().mode = t.dataset.mode;
-      previewNow();
-      paintMode();
-      markDirty();
+      if ((appearance.mode || 'auto') === t.dataset.mode) return;
+      appearance.mode = t.dataset.mode;
+      commitAppearance();
     };
   });
 
-  dockHost.querySelector('#apSample').onclick = () => {
-    const blob = new Blob([SAMPLE_THEME], { type: 'text/javascript;charset=utf-8' });
+  const downloadSample = (name, text) => {
+    const blob = new Blob([text], { type: 'text/javascript;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'my-theme.js';
+    a.download = name;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   };
+  dockHost.querySelector('#apSampleSimple').onclick = () => downloadSample('my-theme.js', SAMPLE_SIMPLE);
+  dockHost.querySelector('#apSampleComplex').onclick = () => downloadSample('fancy-theme.js', SAMPLE_COMPLEX);
 
   paintThemes();
   paintMode();
 
   /* ---------- 抽屉开合 ---------- */
-  const setDrawer = (open) => {
-    drawer.classList.toggle('open', open);
-    // 抽屉铺满右侧时收起用户卡片，把右下角让给保存条
-    chip.hidden = open;
-  };
+  const setDrawer = (open) => drawer.classList.toggle('open', open);
   chip.onclick = () => setDrawer(!drawer.classList.contains('open'));
   dockHost.querySelector('#apClose').onclick = () => setDrawer(false);
   document.addEventListener('keydown', function onEsc(e) {
@@ -494,118 +478,30 @@ export async function render(el, ctx) {
     };
   });
 
-  /* ---------- 保存 / 取消 ---------- */
-  const saveBtn = dockHost.querySelector('#saveBtn');
-  const cancelBtn = dockHost.querySelector('#cancelBtn');
-
-  // 逐段提交：每段成功后立刻把它记为新的基线，失败则停在原地等待重试
-  async function save() {
-    const jobs = [];
-
-    if (!same(draft.appearance, base.appearance)) {
-      jobs.push(['外观', async () => {
-        const applied = await ctx.saveAppearance(clone(draft.appearance));
-        draft.appearance = clone(applied);
-        base.appearance = clone(applied);
-        paintThemes();
-        paintMode();
-      }]);
-    }
-    if (draft.publishEnabled !== base.publishEnabled) {
-      jobs.push(['发布', async () => {
-        await api.setPublishEnabled(draft.publishEnabled);
-        base.publishEnabled = draft.publishEnabled;
-        if (ctx.state) ctx.state.publishEnabled = draft.publishEnabled;
-      }]);
-    }
-    if (!same(draft.cloudinary, base.cloudinary)) {
-      jobs.push(['图床', async () => {
-        await api.saveSettings({ cloudinary: clone(draft.cloudinary) });
-        base.cloudinary = clone(draft.cloudinary);
-        if (ctx.state) ctx.state.cloudinary = { ...(ctx.state.cloudinary || {}), ...clone(draft.cloudinary) };
-        ctx.syncCloudinary && ctx.syncCloudinary(draft.cloudinary.enabled);
-      }]);
-    }
-    if (ghBase && gh && !same(gh, ghBase)) {
-      jobs.push(['GitHub 加速', async () => {
-        const r = await api.saveGithubProxy({ enabled: gh.enabled, active: gh.active, custom: gh.custom });
-        gh = { ...gh, enabled: !!r.enabled, active: r.active || '', custom: r.custom || [] };
-        ghBase = clone(gh);
-        paintGh();
-      }]);
-    }
-
-    if (!jobs.length) { markDirty(); return true; }
-
-    saveBtn.disabled = true;
-    const failed = [];
-    for (const [label, run] of jobs) {
-      try {
-        await run();
-      } catch (e) {
-        failed.push(`${label}：${e.message}`);
-      }
-    }
-    saveBtn.disabled = false;
-    markDirty();
-
-    if (failed.length) {
-      ui.toast('部分设置未保存', failed.join('；'), 'err', 7000);
-      return false;
-    }
-    ui.toast('已保存', '', 'ok', 2200);
-    return true;
-  }
-
-  function cancel() {
-    draft.appearance = clone(base.appearance);
-    draft.publishEnabled = base.publishEnabled;
-    draft.cloudinary = clone(base.cloudinary);
-    if (ghBase) gh = clone(ghBase);
-    ctx.revertAppearance();
-
-    // 表单控件回到基线
-    const pubToggle = $('#pubToggle');
-    if (pubToggle) pubToggle.checked = draft.publishEnabled;
-    const cloudOn = $('#cloudOn');
-    if (cloudOn) cloudOn.checked = draft.cloudinary.enabled;
-    const cloudState = $('#cloudStateText');
-    if (cloudState) cloudState.textContent = draft.cloudinary.enabled ? '已启用' : '未启用';
-    const cn = $('#cloudName');
-    if (cn) cn.value = draft.cloudinary.cloudName;
-    const up = $('#preset');
-    if (up) up.value = draft.cloudinary.uploadPreset;
-
-    paintThemes();
-    paintMode();
-    if (gh) paintGh();
-    markDirty();
-    ui.toast('已取消修改', '', 'info', 1800);
-  }
-
-  saveBtn.onclick = () => save();
-  cancelBtn.onclick = () => cancel();
-
-  /* ---------- 离开确认 ---------- */
-  ctx.leaveGuard = async () => {
-    if (!dirtyNow()) return true;
-    const choice = await ui.unsavedDialog(() => save());
-    return !!choice;
-  };
-  ctx.hasUnsaved = () => dirtyNow();
-
-  /* ---------- 发布设置 ---------- */
+  /* ---------- 发布设置（即时保存） ---------- */
   const pubToggle = $('#pubToggle');
-  pubToggle.onchange = () => {
-    draft.publishEnabled = pubToggle.checked;
-    markDirty();
+  pubToggle.onchange = async () => {
+    const want = pubToggle.checked;
+    pubToggle.disabled = true;
+    try {
+      await api.setPublishEnabled(want);
+      if (ctx.state) ctx.state.publishEnabled = want;
+      ui.toast(want ? '发布已开启' : '发布已关闭', '', 'ok', 2000);
+    } catch (e) {
+      pubToggle.checked = !want;
+      ui.toast('保存失败', e.message, 'err', 5000);
+    } finally {
+      pubToggle.disabled = false;
+    }
   };
 
+  /* ---------- 管理员：平台安装 / 卸载 ---------- */
   const pubList = $('#pubList');
   const pubAvailable = $('#pubAvailable');
   const pubListError = $('#pubListError');
 
   const paintPublish = async () => {
+    if (!pubList) return;
     pubList.innerHTML = '<div class="pub-admin-loading">加载中…</div>';
     let r;
     try {
@@ -613,13 +509,6 @@ export async function render(el, ctx) {
     } catch (e) {
       pubList.innerHTML = `<div class="hint" style="color:var(--err)">加载失败：${ui.esc(e.message)}</div>`;
       return;
-    }
-    if (r.enabled !== undefined && base.publishEnabled === draft.publishEnabled) {
-      // 没有本地未保存改动时以服务端为准；有改动则保留用户刚点的状态
-      draft.publishEnabled = !!r.enabled;
-      base.publishEnabled = !!r.enabled;
-      pubToggle.checked = draft.publishEnabled;
-      if (ctx.state) ctx.state.publishEnabled = draft.publishEnabled;
     }
     const installed = r.installed || [];
     const available = (r.available || []).filter((a) => !installed.some((p) => p.id === a.id));
@@ -629,15 +518,15 @@ export async function render(el, ctx) {
         <div class="pub-admin-row">
           <div class="pub-admin-info">
             <b>${ui.esc(p.name || p.id)}</b>
-            <span class="pub-admin-meta">v${ui.esc(p.version || '?')}${p.missing ? ' · 文件丢失，需管理员重新安装' : ''}</span>
+            <span class="pub-admin-meta">v${ui.esc(p.version || '?')}${p.missing ? ' · 文件丢失，请重新安装' : ''}</span>
             ${p.desc ? `<span class="pub-admin-desc">${ui.esc(p.desc)}</span>` : ''}
           </div>
           <div class="pub-admin-ops">
             <button class="btn btn-ghost btn-sm" data-pub-config="${ui.esc(p.id)}" ${p.missing ? 'disabled' : ''}>配置</button>
-            ${isAdmin ? `<button class="btn btn-danger btn-sm" data-pub-del="${ui.esc(p.id)}">卸载</button>` : ''}
+            <button class="btn btn-danger btn-sm" data-pub-del="${ui.esc(p.id)}">卸载</button>
           </div>
         </div>`).join('')
-      : `<div class="pub-admin-empty">还没有安装平台${isAdmin ? '，可在下方下载' : '，请联系管理员安装'}</div>`;
+      : `<div class="pub-admin-empty">还没有安装平台，可在下方按需下载</div>`;
 
     if (pubAvailable) {
       pubAvailable.innerHTML = available.length
@@ -695,17 +584,29 @@ export async function render(el, ctx) {
       };
     });
   };
-  paintPublish();
+  if (isAdmin) paintPublish();
 
-  /* ---------- 管理员：GitHub 加速源 ---------- */
+  /* ---------- 管理员：GitHub 加速源（即时保存） ---------- */
   const ghToggle = $('#ghProxyToggle');
   const ghBody = $('#ghProxyBody');
+  let gh = null;
   let paintGh = () => {};
 
   if (ghToggle && ghBody) {
     const presetsEl = $('#ghPresets');
     const customEl = $('#ghCustomList');
     const statusEl = $('#ghStatus');
+
+    const commitGh = async () => {
+      try {
+        const r = await api.saveGithubProxy({ enabled: gh.enabled, active: gh.active, custom: gh.custom });
+        gh = { ...gh, enabled: !!r.enabled, active: r.active || '', custom: r.custom || [] };
+        paintGh();
+        ui.toast('GitHub 加速设置已保存', '', 'ok', 1800);
+      } catch (e) {
+        ui.toast('GitHub 加速设置保存失败', e.message, 'err', 5000);
+      }
+    };
 
     const paintPresets = () => {
       const opts = [
@@ -722,7 +623,7 @@ export async function render(el, ctx) {
           </label>`).join('')
         : '<p class="hint">暂无可用线路，可添加自定义地址</p>';
       presetsEl.querySelectorAll('.gh-opt').forEach((n) => {
-        n.onclick = () => { gh.active = n.dataset.url; paintPresets(); markDirty(); };
+        n.onclick = () => { gh.active = n.dataset.url; paintPresets(); commitGh(); };
       });
     };
 
@@ -740,7 +641,7 @@ export async function render(el, ctx) {
           if (gh.active === n.dataset.del) gh.active = '';
           paintCustom();
           paintPresets();
-          markDirty();
+          commitGh();
         };
       });
     };
@@ -755,9 +656,7 @@ export async function render(el, ctx) {
     try {
       const r = await api.githubProxy();
       gh = { enabled: !!r.enabled, active: r.active || '', custom: r.custom || [], presets: r.presets || [] };
-      ghBase = clone(gh);
       paintGh();
-      markDirty();
     } catch (e) {
       statusEl.textContent = '加载失败：' + e.message;
     }
@@ -769,7 +668,7 @@ export async function render(el, ctx) {
         gh.active = (gh.presets[0] && gh.presets[0].url) || '';
         paintPresets();
       }
-      markDirty();
+      commitGh();
     };
 
     $('#ghAdd').onclick = () => {
@@ -788,7 +687,7 @@ export async function render(el, ctx) {
       input.value = '';
       paintCustom();
       paintPresets();
-      markDirty();
+      commitGh();
     };
 
     $('#testGhProxy').onclick = async (e) => {
@@ -807,16 +706,30 @@ export async function render(el, ctx) {
     };
   }
 
-  /* ---------- 图床 ---------- */
+  /* ---------- 图床（输入防抖后即时保存） ---------- */
   const cloudOn = $('#cloudOn');
   if (cloudOn) {
+    const commitCloudinary = ui.debounce(async (next) => {
+      try {
+        await api.saveSettings({ cloudinary: { ...next } });
+        if (ctx.state) ctx.state.cloudinary = { ...(ctx.state.cloudinary || {}), ...next };
+        ctx.syncCloudinary && ctx.syncCloudinary(next.enabled);
+        ui.toast('图床设置已保存', '', 'ok', 1800);
+      } catch (e) {
+        ui.toast('图床设置保存失败', e.message, 'err', 5000);
+      }
+    }, 600);
+    const snapshot = () => ({
+      enabled: cloudOn.checked,
+      cloudName: $('#cloudName').value.trim(),
+      uploadPreset: $('#preset').value.trim(),
+    });
     cloudOn.onchange = () => {
-      draft.cloudinary.enabled = cloudOn.checked;
       $('#cloudStateText').textContent = cloudOn.checked ? '已启用' : '未启用';
-      markDirty();
+      commitCloudinary(snapshot());
     };
-    $('#cloudName').oninput = (e) => { draft.cloudinary.cloudName = e.target.value.trim(); markDirty(); };
-    $('#preset').oninput = (e) => { draft.cloudinary.uploadPreset = e.target.value.trim(); markDirty(); };
+    $('#cloudName').oninput = () => commitCloudinary(snapshot());
+    $('#preset').oninput = () => commitCloudinary(snapshot());
   }
 
   /* ---------- 存储路径（立即生效） ---------- */
@@ -826,7 +739,7 @@ export async function render(el, ctx) {
   resetBtn && (resetBtn.onclick = async () => {
     const ok = await ui.confirmDialog({
       title: '恢复到应用数据目录？',
-      desc: '当前目录下的文章、图片与 SEO 记录会被移动到应用数据目录，原目录内本应用的文件将被清空。',
+      desc: '当前目录下的文章、图片与检测记录会被移动到应用数据目录，原目录内本应用的文件将被清空。',
       okText: '移动并切换',
     });
     if (!ok) return;
@@ -889,8 +802,6 @@ export async function render(el, ctx) {
       label.textContent = '检查更新';
     }
   };
-
-  markDirty();
 }
 
 /* ---------------- 目录浏览器 ---------------- */
@@ -945,7 +856,7 @@ function openBrowser(ctx) {
         if (!current) return;
         const ok = await ui.confirmDialog({
           title: '切换到该路径？',
-          desc: `文章、图片与 SEO 记录将移动到 ${current} 下你的专属文件夹。`,
+          desc: `文章、图片与检测记录将移动到 ${current} 下你的专属文件夹。`,
           okText: '移动并切换',
         });
         if (!ok) return;

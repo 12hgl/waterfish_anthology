@@ -9,7 +9,7 @@ import * as seo from './views/seo.js';
 import * as settings from './views/settings.js';
 
 const VIEWS = { articles, images, seo, settings };
-const TITLES = { articles: '文章库', images: '图片库', seo: 'SEO 检测', settings: '设置' };
+const TITLES = { articles: '文章库', images: '图片库', seo: '网页检测', settings: '设置' };
 
 /* ---------------- 外观 ---------------- */
 
@@ -100,13 +100,18 @@ function applyAppearance(ap) {
   }
 }
 
-/* ---------------- 自定义主题：一行一条的声明 ----------------
-   主色: #1F6C9F
-   副色: #B45309
-   背景: https://example.com/bg.jpg
-   字体: 宋体
-   不再执行任意脚本：只解析键值并落到 CSS 变量，
-   既避免脚本注入，也让主题文件一眼能看懂、几秒能改完。 */
+/* ---------------- 自定义主题：js 文件，简单 / 复杂两种写法 ----------------
+   简单：一行一条外观声明，只调主色 / 副色 / 背景 / 字体等——
+     主色: #1F6C9F
+     副色: #B45309
+     背景: https://example.com/bg.jpg
+     字体: 宋体
+   复杂：文件里定义 function theme(api)，可调界面、动画、图标——
+     api.setVar(变量, 值)  设置 CSS 变量
+     api.css(样式文本)     注入 <style>（动画、界面微调都写在这里）
+     api.icon(名称, 图形)  覆盖内置图标（SVG path，currentColor 上色）
+     api.el / api.dark     根元素 / 当前是否深色
+   判别方式：文件里出现 function theme( 即按复杂模式执行，否则按声明解析。 */
 
 const SPEC_ALIASES = {
   主色: 'accent', accent: 'accent', 强调色: 'accent',
@@ -126,11 +131,6 @@ const SPEC_VARS = [
   '--accent', '--accent-ink', '--accent-soft', '--accent-line', '--accent-2',
   '--app-font', '--theme-bg', '--ink', '--paper', '--r', '--r-lg',
 ];
-
-function clearCustomTheme() {
-  const st = document.documentElement.style;
-  SPEC_VARS.forEach((p) => st.removeProperty(p));
-}
 
 // parseThemeSpec 解析「一行一条」的主题声明。
 // 支持 "键: 值"、"键 = 值"、"键 值" 三种写法；// 与 # 开头为注释。
@@ -165,6 +165,17 @@ function parseThemeSpec(text) {
 }
 
 const isUrl = (v) => /^https?:\/\//i.test(v || '');
+
+const THEME_STYLE_ID = 'wf-theme-js';
+
+// 清理自定义主题会留下的所有痕迹：CSS 变量、注入的 <style>、覆盖的图标
+function clearCustomTheme() {
+  const st = document.documentElement.style;
+  SPEC_VARS.forEach((p) => st.removeProperty(p));
+  const style = document.getElementById(THEME_STYLE_ID);
+  if (style) style.remove();
+  ui.resetCustomIcons();
+}
 
 // applyThemeSpec 把解析结果落到 CSS 变量。
 function applyThemeSpec(spec) {
@@ -211,11 +222,56 @@ function applyThemeSpec(spec) {
   }
 }
 
-// applyCustomTheme 取当前选中的自定义主题并应用；返回 { spec, invalid } 供界面提示。
+// 复杂主题可用的 API：变量 / 样式 / 图标 / 根元素 / 深浅色。
+// 只暴露这些入口，主题不直接持有全局对象引用，切换主题时按约定统一清理。
+function makeThemeAPI() {
+  return {
+    el: document.documentElement,
+    get dark() { return isDarkNow(); },
+    vars: (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim(),
+    setVar: (name, value) => {
+      if (!/^--[\w-]+$/.test(String(name))) throw new Error(`变量名不合法：${name}`);
+      document.documentElement.style.setProperty(name, String(value ?? ''));
+    },
+    css: (text) => {
+      let node = document.getElementById(THEME_STYLE_ID);
+      if (!node) {
+        node = document.createElement('style');
+        node.id = THEME_STYLE_ID;
+        document.head.appendChild(node);
+      }
+      node.textContent = String(text ?? '');
+    },
+    icon: (name, svg) => ui.setCustomIcon(name, svg),
+  };
+}
+
+// runComplexTheme 执行复杂主题：文件中需定义 function theme(api)。
+function runComplexTheme(code) {
+  const factory = new Function('"use strict";\n' + code + '\n;return typeof theme === "function" ? theme : null;');
+  const themeFn = factory();
+  if (typeof themeFn !== 'function') {
+    throw new Error('复杂主题需要定义 function theme(api)');
+  }
+  themeFn(makeThemeAPI());
+}
+
+// applyCustomTheme 取当前选中的自定义主题并应用。
+// 返回 { invalid } 供界面提示（简单模式解析不通过的行）或 { error }（复杂模式执行失败）。
 function applyCustomTheme(ap) {
   const cfg = ap || {};
   const t = (cfg.themes || []).find((x) => x.name === cfg.theme);
   if (!t) return null;
+  // 文件里出现 function theme( → 复杂模式；否则按一行一条的声明解析
+  if (/function\s+theme\s*\(/.test(t.js || '')) {
+    try {
+      runComplexTheme(t.js);
+      return {};
+    } catch (e) {
+      console.warn('复杂主题执行失败：', e);
+      return { error: e.message };
+    }
+  }
   const parsed = parseThemeSpec(t.js);
   applyThemeSpec(parsed.spec);
   return parsed;

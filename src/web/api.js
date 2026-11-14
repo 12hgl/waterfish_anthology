@@ -46,12 +46,6 @@ export const api = {
     return req('api/uploads', { method: 'POST', body: fd, headers: {} });
   },
 
-  seoList: () => req('api/seo'),
-  seoCheck: (url) => req('api/seo', { method: 'POST', body: JSON.stringify({ url }) }),
-  seoGet: (id) => req(`api/seo/${enc(id)}`),
-  seoRecheck: (id) => req(`api/seo/${enc(id)}/recheck`, { method: 'POST' }),
-  seoDelete: (id) => req(`api/seo/${enc(id)}`, { method: 'DELETE' }),
-
   settings: () => req('api/settings'),
 
   // 管理员：GitHub 加速源（系统级，全用户生效）

@@ -357,8 +357,8 @@ export async function openPublishDialog(ctx, art) {
       const paintPicker = () => {
         if (!installed.length) {
           picker.innerHTML = `<div class="pub-empty">还没有安装发布适配器。${isAdmin
-            ? '前往「设置 → 发布设置」下载。'
-            : '请联系管理员在「设置 → 发布设置」中安装。'}</div>`;
+            ? '前往「设置 → 管理员设置」下载安装。'
+            : '请联系管理员在「设置 → 管理员设置」中安装。'}</div>`;
           return;
         }
         picker.innerHTML = installed.map((p) => `

@@ -67,7 +67,6 @@ func (a *App) handleState(w http.ResponseWriter, r *http.Request) {
 			"articles":    len(articles),
 			"localImages": len(ua.listLocalImages()),
 			"cloudImages": len(ua.loadCloudIndex()),
-			"seoRecords":  len(ua.listSEORecords()),
 		},
 	})
 }

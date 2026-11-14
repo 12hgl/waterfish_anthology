@@ -48,9 +48,24 @@ export const ICONS = {
   type: '<path d="M5 6.5V5h14v1.5"/><path d="M12 5v14"/><path d="M9 19h6"/>',
 };
 
+/* 自定义图标：复杂主题可通过 api.icon() 覆盖内置图标。
+   值为 SVG 内部图形（path 等），也接受完整 <svg> 标记。 */
+const customIcons = {};
+
+export function setCustomIcon(name, svg) {
+  if (!name) return;
+  customIcons[name] = String(svg ?? '');
+}
+
+export function resetCustomIcons() {
+  for (const k of Object.keys(customIcons)) delete customIcons[k];
+}
+
 export function icon(name, size = 16) {
-  const d = ICONS[name] || '';
-  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="${size}" height="${size}">${d}</svg>`;
+  const custom = customIcons[name];
+  const body = custom ?? ICONS[name] ?? '';
+  if (custom && /^<svg[\s>]/i.test(custom.trim())) return custom; // 完整 svg 原样使用
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="${size}" height="${size}">${body}</svg>`;
 }
 
 export function esc(s) {

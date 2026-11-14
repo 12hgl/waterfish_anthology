@@ -1,5 +1,5 @@
 // 水鱼文集 —— 飞牛 fnOS 原生应用
-// 单二进制服务：文章库 / 图片库 / SEO 检测 / 设置
+// 单二进制服务：文章库 / 图片库 / 设置（网页检测在前端本地完成，无需后端）
 // 双通道监听：TCP 端口（局域网直连）+ Unix socket（飞牛统一网关，携带登录用户身份）
 package main
 
@@ -117,10 +117,6 @@ func (a *App) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/images", a.handleImages)
 	mux.HandleFunc("/api/uploads", a.handleUpload)
 	mux.HandleFunc("/api/images/", a.handleImage)
-
-	// SEO
-	mux.HandleFunc("/api/seo", a.handleSEOList)
-	mux.HandleFunc("/api/seo/", a.handleSEO)
 
 	// 版本更新检测与发布适配器（实验性）
 	mux.HandleFunc("/api/update-check", a.handleUpdateCheck)
