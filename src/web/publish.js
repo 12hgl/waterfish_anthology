@@ -1,8 +1,8 @@
 /* 文章发布
  * 1) 复制发布 —— 复制文章（富文本）。有图床时把本地图片自动换成图床直链，
  *    粘贴到任意编辑器都能直接显示图片；没有图床则保留逐张复制图片的能力。
- * 2) 统一发布 —— 勾选多个平台一次发布；适配器由管理员在「设置 → 发布设置」安装，
- *    每个账号只配置自己的密钥（账号间互相隔离）。
+ * 2) 统一发布 —— 勾选多个平台一次发布；平台与密钥在「设置」里配置，
+ *    发布弹窗只设置封面、标题、标签这类每篇文章不同的内容。
  */
 
 import { api } from './api.js';
@@ -254,6 +254,10 @@ export async function openPublishDialog(ctx, art) {
         <input class="input" id="pubTitle" value="${ui.esc(art.title || '')}" spellcheck="false">
       </div>
       <div class="field">
+        <label for="pubCover">封面</label>
+        <input class="input" id="pubCover" placeholder="图片直链，或本地图片名（有图床时自动转直链）" spellcheck="false">
+      </div>
+      <div class="field">
         <label for="pubTags">标签</label>
         <input class="input" id="pubTags" placeholder="多个标签用逗号分隔" spellcheck="false">
       </div>
@@ -263,23 +267,10 @@ export async function openPublishDialog(ctx, art) {
         ${listError ? `<span class="hint" style="color:var(--warn)">适配器清单加载失败：${ui.esc(listError)}</span>` : ''}
       </div>
       <div class="pub-remote-actions">
-        <button class="btn btn-ghost btn-sm" id="pubConfigBtn">${ui.icon('pencil', 14)}<span>配置选中平台</span></button>
         <button class="btn btn-primary btn-sm" id="pubSendBtn">${ui.icon('rocket', 14)}<span>统一发布</span></button>
       </div>
       <div class="pub-results" id="pubResults" hidden></div>
       <div class="pub-status" id="pubStatus"></div>
-
-      <!-- 适配器配置内联区：不放子弹窗（modal 为单例，会顶掉发布弹窗） -->
-      <div class="pub-config" id="pubConfig" hidden>
-        <div class="pub-config-head">
-          <b id="pubConfigTitle">平台配置</b>
-          <span class="hint">密钥仅保存在你的账号下</span>
-        </div>
-        <div id="pubConfigFields"></div>
-        <div class="pub-config-foot">
-          <button class="btn btn-primary btn-sm" id="pubConfigSave">${ui.icon('save', 14)}<span>保存配置</span></button>
-        </div>
-      </div>
     </div>
 
     <div class="modal-foot">
@@ -380,52 +371,6 @@ export async function openPublishDialog(ctx, art) {
       };
       paintPicker();
 
-      /* ---------- 平台配置（内联展开） ---------- */
-      let cfgFields = [];
-      let cfgMeta = null;
-      const cfgBox = root.querySelector('#pubConfig');
-      const cfgFieldsBox = root.querySelector('#pubConfigFields');
-
-      root.querySelector('#pubConfigBtn').onclick = async () => {
-        const ids = [...selected];
-        if (!ids.length) { ui.toast('请先勾选发布平台', '', 'warn'); return; }
-        const id = ids[0] === (cfgMeta && cfgMeta.id) && ids.length > 1 ? ids[1] : ids[0];
-        const meta = usable.find((p) => p.id === id);
-        if (!meta) return;
-        if (!cfgBox.hidden && cfgMeta && cfgMeta.id === id) { cfgBox.hidden = true; return; } // 再次点击收起
-        let fields = [];
-        try {
-          const reg = await loadAdapter(id);
-          fields = Array.isArray(reg.configFields) ? reg.configFields : [];
-        } catch (e) {
-          ui.toast('加载适配器失败', e.message, 'err', 6000);
-          return;
-        }
-        cfgFields = fields;
-        cfgMeta = meta;
-        root.querySelector('#pubConfigTitle').textContent = `${meta.name || id} · 配置${ids.length > 1 ? '（逐个平台配置）' : ''}`;
-        cfgFieldsBox.innerHTML = configFieldsHTML(fields, meta.config, 'pubcfg');
-        cfgBox.hidden = false;
-        cfgBox.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      };
-
-      root.querySelector('#pubConfigSave').onclick = async (e) => {
-        const btn = e.currentTarget;
-        if (!cfgMeta) return;
-        btn.disabled = true;
-        const next = collectConfigFields(cfgFieldsBox, cfgFields, 'pubcfg');
-        try {
-          await api.savePublisherConfig(cfgMeta.id, next);
-          cfgMeta.config = next;
-          ui.toast('配置已保存', cfgMeta.name || cfgMeta.id, 'ok');
-          cfgBox.hidden = true;
-        } catch (err) {
-          ui.toast('保存失败', err.message, 'err');
-        } finally {
-          btn.disabled = false;
-        }
-      };
-
       /* ---------- 统一发布 ---------- */
       root.querySelector('#pubSendBtn').onclick = async (e) => {
         const btn = e.currentTarget;
@@ -450,9 +395,21 @@ export async function openPublishDialog(ctx, art) {
           row.querySelector('.pub-result-msg').innerHTML = msg;
         };
         try {
-          const { markdown, warnings } = await resolveImages(art.content, (m) => { status.textContent = m; });
+          // 密钥在设置里配置，发布前刷新一次，避免用到弹窗打开时的旧配置
+          try {
+            const fresh = await api.publishers();
+            (fresh.installed || []).forEach((p) => {
+              const m = usable.find((x) => x.id === p.id);
+              if (m) m.config = p.config || {};
+            });
+          } catch { /* 刷新失败就用现有配置 */ }
+          const { markdown, links, warnings } = await resolveImages(art.content, (m) => { status.textContent = m; });
+          // 封面：填了本地图片名且有图床直链时自动转直链
+          const coverRaw = root.querySelector('#pubCover').value.trim();
+          const cover = coverRaw && links[coverRaw] ? links[coverRaw] : coverRaw;
           const payload = {
             title: root.querySelector('#pubTitle').value.trim() || art.title || '未命名文章',
+            cover: cover || '',
             tags: root.querySelector('#pubTags').value.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
             markdown,
             excerpt: excerptOf(art.content),
@@ -468,7 +425,7 @@ export async function openPublishDialog(ctx, art) {
               const fields = Array.isArray(reg.configFields) ? reg.configFields : [];
               const cfg = (meta && meta.config) || {};
               const missingReq = fields.filter((f) => f.required && !cfg[f.key]).map((f) => f.label || f.key);
-              if (missingReq.length) throw new Error(`请先配置：${missingReq.join('、')}`);
+              if (missingReq.length) throw new Error(`请先在「设置 → 发布设置 → 平台密钥」配置：${missingReq.join('、')}`);
               const r = await reg.publish(payload, cfg);
               okCount++;
               setRow(id, 'is-ok', `成功${r && r.url

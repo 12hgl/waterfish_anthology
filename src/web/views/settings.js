@@ -1,71 +1,16 @@
 /* 设置：发布设置 / 管理员设置 / 关于与更新
-   账号与外观收进左下角的用户卡片，点开是外观抽屉。
-   保存模型：改动即时保存，无需手动确认（外部文件编辑器仍有离开提示）。 */
+   账号与外观内置在侧栏（appearance.js），保存模型：改动即时保存。 */
 
 import { api } from '../api.js';
 import * as ui from '../ui.js';
 import { openPublisherConfigDialog } from '../publish.js';
 
 const TUTORIAL_URL = 'https://blog.waterfish.ren/article/4023794e-eb27-8082-a989-db0ca64a70c9';
-const MAX_THEME_JS = 64 * 1024;
-const MAX_CUSTOM_THEMES = 20;
-
-// 内置主题：每套打包配色 / 字体 / 字号 / 背景（与 app.js 的 THEMES 表一致）
-const THEMES = [
-  { id: 'default', name: '纸墨',   color: '#1F6C9F', font: '系统字体', scale: '100%', bg: '纯色' },
-  { id: 'amber',   name: '琥珀',   color: '#B45309', font: '系统字体', scale: '100%', bg: '淡彩' },
-  { id: 'forest',  name: '松绿',   color: '#2F6B4F', font: '衬线字体', scale: '105%', bg: '淡彩' },
-  { id: 'violet',  name: '紫罗兰', color: '#6D5BD0', font: '圆体',     scale: '100%', bg: '淡彩' },
-  { id: 'rose',    name: '玫红',   color: '#BE4B6B', font: '系统字体', scale: '100%', bg: '淡彩' },
-];
-
-const SAMPLE_SIMPLE = `// 简单主题：一行写一项，只写想改的，其余沿用内置外观
-主色: #1F6C9F
-副色: #B45309
-背景: https://example.com/bg.jpg
-字体: 宋体
-`;
-
-const SAMPLE_COMPLEX = `// 复杂主题：定义 function theme(api)，可调界面、动画、图标
-function theme(api) {
-  // 调变量（CSS 变量）
-  api.setVar('--accent', '#7C5CFF');
-  api.setVar('--r', '14px');
-
-  // 注入样式：界面微调、动画都写在这里
-  api.css(\`
-    .card { transition: transform .25s ease, box-shadow .25s ease; }
-    .card:hover { transform: translateY(-2px); }
-    .page-title { letter-spacing: .02em; }
-    .theme-card { animation: apFadeUp .3s ease both; }
-    @keyframes apFadeUp { from { opacity: 0; transform: translateY(6px); } }
-  \`);
-
-  // 换图标（可选）：用 SVG path 覆盖内置图标，颜色跟随 currentColor
-  api.icon('rocket', '<path d="M12 3l7 7-9 11H4v-6z"/><circle cx="14.5" cy="8.5" r="1.4" fill="currentColor" stroke="none"/>');
-}
-`;
-
-const clone = (v) => JSON.parse(JSON.stringify(v ?? null));
-
-function fmtBytes(n) {
-  if (n < 1024) return n + ' B';
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
-  return (n / 1024 / 1024).toFixed(1) + ' MB';
-}
-
-// 主题重名时加 (2)、(3)… 后缀（与后端去重规则一致）
-function uniqueThemeName(name, taken) {
-  let n = name;
-  for (let i = 2; taken.has(n); i++) n = `${name}(${i})`;
-  return n;
-}
 
 export async function render(el, ctx) {
   const st = ctx.state || await ctx.refreshState();
   const isAdmin = !!st.user?.isAdmin || st.user?.source === 'local';
   const userName = st.user?.name || '未知';
-  const avatarText = [...userName][0] || '?';
 
   el.innerHTML = `
     <div class="page-head">
@@ -96,9 +41,11 @@ export async function render(el, ctx) {
         </div>
       </div>
 
-      ${isAdmin ? `
-      <p class="section-desc" style="margin-top:4px">平台适配器的安装与卸载已移到「管理员设置」；各平台的密钥在文章发布弹窗内配置。</p>` : `
-      <p class="section-desc" style="margin-top:4px">发布平台由管理员统一安装；各平台的密钥在文章发布弹窗内配置，仅自己可见。</p>`}
+      <div class="card card-pad section">
+        <div class="section-title">平台密钥</div>
+        <p class="section-desc">各发布平台的密钥在这里配置，仅保存在你自己的账号下。</p>
+        <div class="pub-admin-list" id="pubKeys"></div>
+      </div>
     </div>
 
     <!-- 管理员设置：平台安装 + 图床 + 存储路径 + GitHub 加速（仅管理员可见） -->
@@ -106,7 +53,7 @@ export async function render(el, ctx) {
     <div data-panel="admin" hidden>
       <div class="card card-pad section">
         <div class="section-title">已安装平台</div>
-        <p class="section-desc">装一次全体账号可用；各账号的密钥在发布弹窗里自己填，互相不可见。</p>
+        <p class="section-desc">装一次全体账号可用。</p>
         <div class="pub-admin-list" id="pubList"></div>
       </div>
 
@@ -243,231 +190,6 @@ export async function render(el, ctx) {
 
   const $ = (s) => el.querySelector(s);
 
-  /* ---------- 左下角：用户卡片 + 外观抽屉 ---------- */
-  const dockHost = document.getElementById('dockHost');
-  dockHost.innerHTML = `
-    <aside class="ap-drawer" id="apDrawer" aria-label="外观设置">
-      <div class="ap-drawer-head">
-        <div class="ap-drawer-user">
-          <span class="avatar">${ui.esc(avatarText)}</span>
-          <div>
-            <b>${ui.esc(userName)}</b>
-            <span>${isAdmin ? '管理员' : '成员'} · ${st.stats?.articles ?? 0} 篇文章 · ${st.stats?.localImages ?? 0} 张图片</span>
-          </div>
-        </div>
-        <button class="icon-btn ap-drawer-close" id="apClose" title="关闭">${ui.icon('close', 16)}</button>
-      </div>
-      <div class="ap-drawer-body">
-        <div class="ap-block">
-          <div class="ap-label">主题模式</div>
-          <div class="tabs" id="apMode">
-            <button class="tab" data-mode="auto">跟随系统</button>
-            <button class="tab" data-mode="light">浅色</button>
-            <button class="tab" data-mode="dark">深色</button>
-          </div>
-        </div>
-
-        <div style="margin-top:20px">
-          <div class="ap-label">主题</div>
-          <div class="theme-grid" id="apThemes"></div>
-        </div>
-
-        <div style="margin-top:20px">
-          <div class="ap-label">自定义主题</div>
-          <div class="ap-upload" id="apUpload"></div>
-          <div class="ap-hint" style="margin-top:10px">
-            <p style="margin:0 0 8px">主题是 .js 文件，两种写法：<b>简单</b>一行一条只调外观；<b>复杂</b>定义 function theme(api)，可调界面、动画、图标。</p>
-            <pre class="ap-spec">主色: #1F6C9F
-副色: #B45309
-背景: https://example.com/bg.jpg
-字体: 宋体</pre>
-            <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-              <button class="btn btn-ghost btn-sm" id="apSampleSimple">${ui.icon('download', 13)}<span>简单示例</span></button>
-              <button class="btn btn-ghost btn-sm" id="apSampleComplex">${ui.icon('download', 13)}<span>复杂示例</span></button>
-            </div>
-          </div>
-        </div>
-
-        <div style="margin-top:20px">
-          <div class="ap-label">预览</div>
-          <div class="ap-preview">
-            正文示例：<b>粗体文字</b>、<span class="ap-link">链接样式</span>、<code style="font-family:var(--mono);font-size:12px;background:var(--surface-3);padding:.12em .4em;border-radius:4px">code</code>
-          </div>
-        </div>
-      </div>
-    </aside>
-
-    <div class="settings-dock">
-      <button class="user-chip" id="userChip" title="账号与外观">
-        <span class="avatar">${ui.esc(avatarText)}</span>
-        <span class="user-chip-name">${ui.esc(userName)}</span>
-        <span class="user-chip-palette">${ui.icon('palette', 15)}</span>
-      </button>
-    </div>`;
-
-  const drawer = dockHost.querySelector('#apDrawer');
-  const chip = dockHost.querySelector('#userChip');
-
-  /* ---------- 外观：主题卡片 + 自定义主题（即时保存） ---------- */
-  let appearance = clone(st.appearance || {});
-
-  // 改动即保存：成功后以服务端清洗结果为准，失败则回滚到上次保存值
-  const commitAppearance = async () => {
-    try {
-      const applied = await ctx.saveAppearance(clone(appearance));
-      appearance = clone(applied);
-    } catch { appearance = clone(ctx.state?.appearance || {}); }
-    paintThemes();
-    paintMode();
-  };
-
-  const paintThemes = () => {
-    const active = appearance.theme || 'default';
-    const custom = appearance.themes || [];
-
-    const grid = dockHost.querySelector('#apThemes');
-    grid.innerHTML = [
-      ...THEMES.map((t) => themeCard(t, active === t.id)),
-      ...custom.map((t) => themeCard(t, active === t.name, true)),
-    ].join('');
-
-    grid.querySelectorAll('[data-theme]').forEach((n) => {
-      n.onclick = (e) => {
-        if (e.target.closest('[data-del-theme]')) return;
-        const id = n.dataset.theme;
-        if (id === (appearance.theme || 'default')) return;
-        appearance.theme = id;
-        commitAppearance();
-      };
-    });
-    grid.querySelectorAll('[data-del-theme]').forEach((n) => {
-      n.onclick = (e) => {
-        e.stopPropagation();
-        const name = n.dataset.delTheme;
-        appearance.themes = (appearance.themes || []).filter((t) => t.name !== name);
-        if (appearance.theme === name) appearance.theme = 'default';
-        commitAppearance();
-        ui.toast('已移除主题', name, 'info', 2400);
-      };
-    });
-
-    paintUploadBox();
-  };
-
-  function themeCard(t, active, isCustom = false) {
-    const meta = isCustom
-      ? fmtBytes(new Blob([t.js || '']).size) + ' · ' + (/function\s+theme\s*\(/.test(t.js || '') ? '复杂' : '简单')
-      : `${t.font} · ${t.scale} · ${t.bg}`;
-    return `
-      <button class="theme-card ${active ? 'is-active' : ''}" data-theme="${ui.esc(isCustom ? t.name : t.id)}" title="${ui.esc(t.name)}">
-        <span class="theme-preview">
-          <span class="tp-bar" style="background:${isCustom ? 'var(--ink-3)' : ui.esc(t.color)}"></span>
-          <span class="tp-line"></span>
-          <span class="tp-line short"></span>
-        </span>
-        <span class="theme-name">${ui.esc(t.name)}</span>
-        <span class="theme-meta">${ui.esc(meta)}</span>
-        ${isCustom ? `<span class="theme-del" data-del-theme="${ui.esc(t.name)}" title="移除主题">${ui.icon('close', 12)}</span>` : ''}
-      </button>`;
-  }
-
-  const paintUploadBox = () => {
-    const box = dockHost.querySelector('#apUpload');
-    if (!box) return;
-    const custom = appearance.themes || [];
-    box.innerHTML = `
-      <input type="file" id="apThemeFile" accept=".js,text/javascript,application/javascript">
-      <label for="apThemeFile" style="cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--ink-3)">
-        ${ui.icon('upload', 22)}
-        <span style="font-size:13px">选择 .js 主题文件</span>
-      </label>
-      <div class="ap-upload-meta">${custom.length
-        ? `已安装 ${custom.length}/${MAX_CUSTOM_THEMES} 个自定义主题，重名自动加 (2) 后缀`
-        : `上传后以文件名生成主题，单文件截断至 64 KB，最多 ${MAX_CUSTOM_THEMES} 个`}</div>`;
-    bindUploadBox();
-  };
-
-  function bindUploadBox() {
-    const input = dockHost.querySelector('#apThemeFile');
-    input.onchange = async () => {
-      const file = input.files && input.files[0];
-      if (!file) return;
-      if (!/\.js$/i.test(file.name)) {
-        ui.toast('请选择 .js 文件', '', 'err', 4000);
-        input.value = '';
-        return;
-      }
-      const installed = appearance.themes || [];
-      if (installed.length >= MAX_CUSTOM_THEMES) {
-        ui.toast('自定义主题已达上限', `最多 ${MAX_CUSTOM_THEMES} 个，请先移除不再使用的主题`, 'err', 5000);
-        input.value = '';
-        return;
-      }
-      const truncated = file.size > MAX_THEME_JS;
-      try {
-        const text = await file.slice(0, MAX_THEME_JS).text();
-        if (!text.trim()) {
-          ui.toast('主题文件为空', '请选择有效的 .js 文件', 'err', 4000);
-          return;
-        }
-        const taken = new Set([
-          ...THEMES.flatMap((t) => [t.id, t.name]),
-          ...installed.map((t) => t.name),
-        ]);
-        const stem = file.name.replace(/\.js$/i, '').trim();
-        const name = uniqueThemeName(stem || '自定义主题', taken);
-        appearance.themes = [...installed, { name, js: text }];
-        appearance.theme = name;
-        await commitAppearance();
-        ui.toast(truncated ? '主题已添加并截断至 64 KB' : '主题已添加', name, 'ok', 3200);
-      } finally { input.value = ''; }
-    };
-  }
-
-  const paintMode = () => {
-    const mode = appearance.mode || 'auto';
-    dockHost.querySelectorAll('#apMode .tab').forEach((t) => {
-      t.classList.toggle('is-active', mode === t.dataset.mode);
-    });
-  };
-
-  dockHost.querySelectorAll('#apMode .tab').forEach((t) => {
-    t.onclick = () => {
-      if ((appearance.mode || 'auto') === t.dataset.mode) return;
-      appearance.mode = t.dataset.mode;
-      commitAppearance();
-    };
-  });
-
-  const downloadSample = (name, text) => {
-    const blob = new Blob([text], { type: 'text/javascript;charset=utf-8' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = name;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-  };
-  dockHost.querySelector('#apSampleSimple').onclick = () => downloadSample('my-theme.js', SAMPLE_SIMPLE);
-  dockHost.querySelector('#apSampleComplex').onclick = () => downloadSample('fancy-theme.js', SAMPLE_COMPLEX);
-
-  paintThemes();
-  paintMode();
-
-  /* ---------- 抽屉开合 ---------- */
-  const setDrawer = (open) => drawer.classList.toggle('open', open);
-  chip.onclick = () => setDrawer(!drawer.classList.contains('open'));
-  dockHost.querySelector('#apClose').onclick = () => setDrawer(false);
-  document.addEventListener('keydown', function onEsc(e) {
-    if (e.key !== 'Escape') return;
-    if (!document.body.contains(drawer)) {
-      document.removeEventListener('keydown', onEsc);
-      return;
-    }
-    if (drawer.classList.contains('open') && !document.getElementById('modalHost').classList.contains('open')) {
-      setDrawer(false);
-    }
-  });
-
   /* ---------- 子菜单 ---------- */
   const tabs = [...el.querySelectorAll('.subnav-item')];
   const panels = [...el.querySelectorAll('[data-panel]')];
@@ -494,6 +216,42 @@ export async function render(el, ctx) {
       pubToggle.disabled = false;
     }
   };
+
+  /* ---------- 平台密钥（所有账号可用，仅存自己的账号下） ---------- */
+  const pubKeys = $('#pubKeys');
+  const paintPubKeys = async () => {
+    if (!pubKeys) return;
+    pubKeys.innerHTML = '<div class="pub-admin-loading">加载中…</div>';
+    let installed = [];
+    try {
+      installed = (await api.publishers()).installed || [];
+    } catch (e) {
+      pubKeys.innerHTML = `<div class="hint" style="color:var(--err)">加载失败：${ui.esc(e.message)}</div>`;
+      return;
+    }
+    if (!installed.length) {
+      pubKeys.innerHTML = '<div class="pub-admin-empty">还没有已安装的发布平台（由管理员在「管理员设置」中安装）</div>';
+      return;
+    }
+    pubKeys.innerHTML = installed.map((p) => `
+      <div class="pub-admin-row">
+        <div class="pub-admin-info">
+          <b>${ui.esc(p.name || p.id)}</b>
+          <span class="pub-admin-meta">v${ui.esc(p.version || '?')}${p.config && Object.keys(p.config).length ? ' · 已配置' : ''}</span>
+          ${p.desc ? `<span class="pub-admin-desc">${ui.esc(p.desc)}</span>` : ''}
+        </div>
+        <div class="pub-admin-ops">
+          <button class="btn btn-ghost btn-sm" data-key-config="${ui.esc(p.id)}" ${p.missing ? 'disabled' : ''}>配置密钥</button>
+        </div>
+      </div>`).join('');
+    pubKeys.querySelectorAll('[data-key-config]').forEach((btn) => {
+      btn.onclick = () => {
+        const meta = installed.find((p) => p.id === btn.dataset.keyConfig);
+        if (meta) openPublisherConfigDialog(meta, paintPubKeys);
+      };
+    });
+  };
+  paintPubKeys();
 
   /* ---------- 管理员：平台安装 / 卸载 ---------- */
   const pubList = $('#pubList');
@@ -552,6 +310,8 @@ export async function render(el, ctx) {
             const p = await api.installPublisher(btn.dataset.pubInstall, btn.dataset.name, btn.dataset.desc);
             ui.toast('平台已安装', p.name || p.id, 'ok');
             paintPublish();
+          paintPubKeys();
+            paintPubKeys();
           } catch (e) {
             btn.disabled = false;
             btn.textContent = '下载安装';
@@ -580,6 +340,7 @@ export async function render(el, ctx) {
           await api.removePublisher(btn.dataset.pubDel);
           ui.toast('已卸载', '', 'ok');
           paintPublish();
+          paintPubKeys();
         } catch (e) { ui.toast('卸载失败', e.message, 'err'); }
       };
     });

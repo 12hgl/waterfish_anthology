@@ -196,6 +196,13 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
   white-space: nowrap;
   color: var(--ink);
 }
+/* 收起 / 展开侧栏：固定在顶部品牌行右侧 */
+.brand .collapse-btn {
+  width: 28px; height: 28px; flex: none;
+  margin-left: auto;
+  justify-content: center; padding: 0;
+  border-radius: var(--r);
+}
 
 .nav {
   display: flex;
@@ -226,16 +233,15 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .nav-ico svg { width: 18px; height: 18px; }
 .nav-label { transition: opacity .18s var(--ease); }
 
-.sidebar-foot { padding: 12px; border-top: 1px solid var(--line); }
+.sidebar-foot { padding: 10px 12px 14px; border-top: 1px solid var(--line); }
 .collapse-btn { color: var(--ink-3); }
 .collapse-btn:hover { color: var(--ink); }
 .collapse-btn .nav-ico svg { transition: transform .24s var(--ease); }
 
-.shell.collapsed .brand { justify-content: center; padding-left: 0; padding-right: 0; }
+.shell.collapsed .brand { padding-left: 12px; padding-right: 12px; }
 .shell.collapsed .brand-name,
 .shell.collapsed .nav-label { opacity: 0; width: 0; overflow: hidden; pointer-events: none; }
-.shell.collapsed .nav-item,
-.shell.collapsed .collapse-btn { justify-content: center; padding: 10px 0; gap: 0; }
+.shell.collapsed .nav-item { justify-content: center; padding: 10px 0; gap: 0; }
 .shell.collapsed .collapse-btn .nav-ico svg { transform: rotate(180deg); }
 
 /* ---------------- 内容区 ---------------- */
@@ -1506,34 +1512,31 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 @keyframes pub-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .pub-card input[type="checkbox"] { flex: none; accent-color: var(--accent); width: 15px; height: 15px; }
 
-/* ---------------- 设置：左下角用户卡片 / 外观抽屉 ---------------- */
+/* ---------------- 设置：侧栏用户卡片 / 外观抽屉 ---------------- */
 
 .dock-host { position: relative; z-index: 70; }
 
-.settings-dock {
-  position: fixed; left: 22px; bottom: 20px; z-index: 80;
-  display: flex; align-items: center; gap: 10px;
-  max-width: calc(100vw - 24px);
-}
-
+/* 用户卡片内置在侧栏底部 */
 .user-chip {
   display: flex; align-items: center; gap: 9px;
-  padding: 5px 12px 5px 5px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  box-shadow: var(--shadow-card);
-  transition: border-color .16s var(--ease), box-shadow .16s var(--ease), transform .16s var(--ease);
+  width: 100%;
+  padding: 6px 10px 6px 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-lg);
+  transition: background .16s var(--ease), border-color .16s var(--ease), color .16s var(--ease);
 }
-.user-chip:hover { border-color: var(--line-strong); box-shadow: var(--shadow-pop); transform: translateY(-1px); }
+.user-chip:hover { background: var(--surface-3); border-color: var(--line); }
 .user-chip.is-open { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .user-chip-name {
-  font-size: 13px; font-weight: 600; max-width: 132px;
+  font-size: 13px; font-weight: 600; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.user-chip-palette { color: var(--ink-3); display: grid; place-items: center; transition: color .16s var(--ease); }
+.user-chip-palette { color: var(--ink-3); display: grid; place-items: center; margin-left: auto; transition: color .16s var(--ease); }
 .user-chip:hover .user-chip-palette, .user-chip.is-open .user-chip-palette { color: var(--accent); }
-.user-chip[hidden] { display: none; }
+.shell.collapsed .user-chip { justify-content: center; padding: 6px 0; gap: 0; }
+.shell.collapsed .user-chip-name,
+.shell.collapsed .user-chip-palette { display: none; }
 
 .avatar {
   width: 28px; height: 28px; flex: none;
@@ -1571,7 +1574,6 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .ap-hint code { font-family: var(--mono); font-size: 11.5px; background: var(--surface-3); padding: .12em .35em; border-radius: 4px; }
 
 @media (max-width: 720px) {
-  .settings-dock { left: 12px; bottom: 12px; gap: 8px; }
   .user-chip-name { max-width: 84px; }
 }
 

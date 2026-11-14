@@ -3,6 +3,7 @@
 import { api } from './api.js';
 import * as ui from './ui.js';
 import { setupMarkdown } from './markdown.js';
+import { initAppearance } from './appearance.js';
 import * as articles from './views/articles.js';
 import * as images from './views/images.js';
 import * as seo from './views/seo.js';
@@ -425,9 +426,7 @@ async function route() {
   if (rendering) return;
   rendering = true;
   const host = document.getElementById('view');
-  // 各视图的浮动层（设置页的保存条 / 外观抽屉）随路由切换整体清理
-  const dock = document.getElementById('dockHost');
-  if (dock) dock.innerHTML = '';
+  // 外观抽屉是全局的（侧栏用户卡片），不随路由清理
   host.scrollTop = 0;
   document.getElementById('content').scrollTop = 0;
   try {
@@ -502,6 +501,9 @@ async function boot() {
     if (saved) document.documentElement.dataset.theme = saved;
   }
   preconnectCloudinary(!!ctx.state?.cloudinary?.enabled);
+
+  // 账号与外观：用户卡片内置在侧栏底部，点开是外观抽屉（全局可用）
+  initAppearance(ctx);
 
   // 系统深浅色变化时，重算依赖当前模式的外观（淡色背景 / 自定义强调色）
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {

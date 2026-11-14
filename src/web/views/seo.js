@@ -1,4 +1,4 @@
-/* 网页检测：本地检查文章的网页质量（SEO + AI Agent 就绪度）
+/* 网页检测：在本地检测网页的质量（SEO + AI Agent 就绪度），不联网、不上传内容
    全程离线：只分析文章自身的 Markdown，不访问网络、不上传内容。 */
 
 import { api } from '../api.js';
@@ -9,7 +9,7 @@ export async function render(el, ctx) {
     <div class="page-head">
       <div>
         <h1 class="page-title">网页检测</h1>
-        <div class="page-sub">本地检查文章的网页质量：SEO 与 AI Agent 就绪度，全程离线</div>
+        <div class="page-sub">在本地检测网页的质量：SEO 与 AI Agent 就绪度，全程离线，不上传内容</div>
       </div>
     </div>
 
@@ -21,7 +21,7 @@ export async function render(el, ctx) {
         <button class="btn btn-primary" id="run">${ui.icon('search')}<span>开始检测</span></button>
       </div>
       <div class="field" style="margin:12px 0 0">
-        <span class="hint">检查内容：SEO（标题、摘要、标题层级、图片 alt、链接、字数）与 Agent 就绪（语义结构、锚文本、内容文本化、代码块标注等）。检查在本地完成，不依赖在线访问。</span>
+        <span class="hint">检查内容：SEO（标题、摘要、标题层级、图片 alt、链接、字数）与 Agent 就绪（语义结构、锚文本、内容文本化、代码块标注等）。所有检查都在本地完成，不访问网络、不上传内容。</span>
       </div>
     </div>
 
@@ -238,7 +238,7 @@ function paintResult(box, art, rep) {
         <div style="flex:1;min-width:220px">
           <div style="font-family:var(--serif);font-size:17px;font-weight:700">${ui.esc(art.title || '未命名文章')}</div>
           <div class="page-sub" style="margin-top:6px">约 ${s.textChars} 字 · 图片 ${s.images.length} · 链接 ${s.links.length} · H1 ${s.h1} / H2 ${s.h2} / H3 ${s.h3}</div>
-          <div class="page-sub" style="margin-top:2px">本地检查 · 未访问网络</div>
+          <div class="page-sub" style="margin-top:2px">本地检测 · 未访问网络</div>
         </div>
       </div>
 

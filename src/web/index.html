@@ -24,6 +24,13 @@
         </svg>
       </span>
       <span class="brand-name">水鱼文集</span>
+      <button class="collapse-btn brand-collapse" id="collapseBtn" title="收起 / 展开侧栏">
+        <span class="nav-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14.5 6 9 12l5.5 6"/>
+          </svg>
+        </span>
+      </button>
     </div>
 
     <nav class="nav" id="nav">
@@ -63,12 +70,10 @@
     </nav>
 
     <div class="sidebar-foot">
-      <button class="collapse-btn" id="collapseBtn" title="收起侧栏">
-        <span class="nav-ico">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14.5 6 9 12l5.5 6"/>
-          </svg>
-        </span>
+      <button class="user-chip" id="userChip" title="账号与外观">
+        <span class="avatar" id="userAvatar">?</span>
+        <span class="user-chip-name" id="userName">…</span>
+        <span class="user-chip-palette" id="userPalette"></span>
       </button>
     </div>
   </aside>
